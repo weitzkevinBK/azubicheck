@@ -46,6 +46,20 @@
                 </div>
             </section>
 
+            <!-- 1b. TEACHER LOGIN -->
+            <section id="screen-teacher-login" class="screen hidden fade-in">
+                <div class="glass-container">
+                    <button class="back-btn" onclick="app.showScreen('screen-role-select')">← Zurück</button>
+                    <h2>Lehrer Login</h2>
+                    <p>Bitte gib das Passwort ein, um Sitzungen zu verwalten.</p>
+                    <div class="input-group">
+                        <label for="teacher-password">Passwort</label>
+                        <input type="password" id="teacher-password" placeholder="••••••••">
+                    </div>
+                    <button class="btn btn-primary w-full" onclick="app.verifyTeacherPassword()">Einloggen</button>
+                </div>
+            </section>
+
             <!-- 2. STUDENT SETUP / ONBOARDING -->
             <section id="screen-student-setup" class="screen hidden fade-in">
                 <div class="glass-container">

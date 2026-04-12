@@ -104,8 +104,26 @@ const AppController = {
                 this.showScreen('screen-student-setup');
             }
         } else if (role === 'teacher') {
+            const hasLogin = sessionStorage.getItem('teacher_logged_in');
+            if (hasLogin) {
+                this.showScreen('screen-teacher-dashboard');
+                this.loadTeacherDashboard();
+            } else {
+                document.getElementById('teacher-password').value = "";
+                this.showScreen('screen-teacher-login');
+            }
+        }
+    },
+
+    verifyTeacherPassword() {
+        const pwd = document.getElementById('teacher-password').value;
+        const SECRET = "Azubi2026";
+        if (pwd === SECRET) {
+            sessionStorage.setItem('teacher_logged_in', 'true');
             this.showScreen('screen-teacher-dashboard');
             this.loadTeacherDashboard();
+        } else {
+            alert("Das Passwort ist leider falsch.");
         }
     },
 
