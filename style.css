@@ -41,7 +41,7 @@ body {
 
 .app-container {
     width: 100%;
-    max-width: 500px;
+    max-width: 800px;
     padding: 2rem 1.5rem;
     display: flex;
     flex-direction: column;
@@ -364,3 +364,98 @@ input:focus {
     transition: background-color 0.3s;
 }
 .status-indicator.online { background-color: var(--success); box-shadow: 0 0 8px var(--success); }
+
+/* NEW AUTH STYLES */
+.auth-container {
+    max-width: 450px;
+    margin: 0 auto;
+    width: 100%;
+}
+.auth-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--glass-border);
+    margin-bottom: 1rem;
+}
+.auth-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 1rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+    font-family: inherit;
+    font-size: 1rem;
+}
+.auth-tab.active {
+    color: var(--primary);
+    border-bottom: 2px solid var(--primary);
+}
+
+/* DASHBOARD LAYOUT */
+.dashboard-layout {
+    display: flex;
+    gap: 1.5rem;
+    flex-direction: column;
+}
+@media (min-width: 640px) {
+    .dashboard-layout {
+        flex-direction: row;
+    }
+    .dashboard-sidebar {
+        width: 250px;
+        flex-shrink: 0;
+    }
+    .dashboard-main {
+        flex-grow: 1;
+    }
+}
+.dashboard-sidebar {
+    padding: 1.5rem;
+    border-radius: 1.25rem;
+}
+.sessions-list li {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.sessions-list li:hover, .sessions-list li.active {
+    background: rgba(99, 102, 241, 0.2);
+    border-left: 3px solid var(--primary);
+}
+.qr-micro-display {
+    cursor: pointer;
+    background: white;
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    color: black;
+    display: inline-block;
+}
+.qr-micro-display #qr-code-canvas {
+    width: 64px;
+    height: 64px;
+    display: block;
+    padding: 0;
+}
+
+/* MODAL OVERLAY */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(5px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-content {
+    padding: 2rem;
+    max-width: 400px;
+    width: 90%;
+}
+#qr-code-canvas-large canvas {
+    background: white;
+    padding: 1rem;
+    border-radius: 1rem;
+}

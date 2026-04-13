@@ -8,6 +8,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- Premium Styles -->
     <link rel="stylesheet" href="style.css">
+    
+    <!-- Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-database-compat.js"></script>
 </head>
 <body>
     <div id="app" class="app-container">
@@ -18,80 +28,70 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-fingerprint"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>
                 <span>Azubi<span class="text-gradient">Check.</span></span>
             </div>
-            <div id="header-status" class="status-indicator"></div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <span id="user-info-text" class="text-sm"></span>
+                <button id="btn-logout" class="btn btn-secondary btn-small hidden" onclick="app.logout()">Logout</button>
+                <div id="header-status" class="status-indicator"></div>
+            </div>
         </header>
 
         <!-- MAIN SCREENS -->
         <main class="main-content">
             
-            <!-- 1. ROLE SELECTION -->
-            <section id="screen-role-select" class="screen active fade-in">
-                <div class="hero-section">
-                    <h1>Willkommen bei AzubiCheck</h1>
-                    <p>Wähle deine Rolle, um fortzufahren.</p>
-                </div>
-                
-                <div class="card-grid">
-                    <button class="role-card glass-panel interactive" onclick="app.selectRole('student')">
-                        <div class="role-icon">🧑‍🎓</div>
-                        <h2>Ich bin Schüler</h2>
-                        <p>Anwesenheit scannen & bestätigen</p>
-                    </button>
-                    
-                    <button class="role-card glass-panel interactive" onclick="app.selectRole('teacher')">
-                        <div class="role-icon">👩‍🏫</div>
-                        <h2>Ich bin Lehrer</h2>
-                        <p>Sitzung starten & Anwesenheiten prüfen</p>
-                    </button>
-                </div>
-            </section>
-
-            <!-- 1b. TEACHER LOGIN -->
-            <section id="screen-teacher-login" class="screen hidden fade-in">
-                <div class="glass-container">
-                    <button class="back-btn" onclick="app.showScreen('screen-role-select')">← Zurück</button>
-                    <h2>Lehrer Login</h2>
-                    <p>Bitte gib das Passwort ein, um Sitzungen zu verwalten.</p>
-                    <div class="input-group">
-                        <label for="teacher-password">Passwort</label>
-                        <input type="password" id="teacher-password" placeholder="••••••••">
-                    </div>
-                    <button class="btn btn-primary w-full" onclick="app.verifyTeacherPassword()">Einloggen</button>
-                </div>
-            </section>
-
-            <!-- 2. STUDENT SETUP / ONBOARDING -->
-            <section id="screen-student-setup" class="screen hidden fade-in">
-                <div class="glass-container">
-                    <button class="back-btn" onclick="app.showScreen('screen-role-select')">← Zurück</button>
-                    <h2>Einrichtung</h2>
-                    <p>Richte dein Gerät einmalig ein.</p>
-                    
-                    <div class="input-group">
-                        <label for="student-name">Vor- und Nachname</label>
-                        <input type="text" id="student-name" placeholder="z.B. Max Mustermann" autocomplete="name">
+            <!-- 1. AUTH SCREEN -->
+            <section id="screen-auth" class="screen active fade-in">
+                <div class="glass-container auth-container">
+                    <div class="auth-tabs">
+                        <button class="auth-tab active" onclick="app.switchAuthTab('login')">Einloggen</button>
+                        <button class="auth-tab" onclick="app.switchAuthTab('register')">Registrieren</button>
                     </div>
                     
-                    <div class="feature-box">
-                        <div class="feature-icon">🔒</div>
-                        <div class="feature-text">
-                            <strong>FaceID / Biometrie</strong>
-                            <span>Um sicherzustellen, dass nur du für dich eincheckst, verknüpfen wir dieses Gerät mit dir.</span>
+                    <div id="auth-form" class="mt-4">
+                        <h2 id="auth-title">Willkommen zurück</h2>
+                        <p id="auth-desc">Bitte logge dich ein, um fortzufahren.</p>
+                        
+                        <div id="register-fields" class="hidden">
+                            <div class="input-group">
+                                <label for="auth-role">Rolle</label>
+                                <select id="auth-role" onchange="app.checkRoleCode()">
+                                    <option value="student">Azubi / Schüler</option>
+                                    <option value="teacher">Lehrer</option>
+                                </select>
+                            </div>
+                            
+                            <div class="input-group">
+                                <label for="auth-name">Vor- und Nachname</label>
+                                <input type="text" id="auth-name" placeholder="z.B. Max Mustermann">
+                            </div>
+                            
+                            <div class="input-group hidden" id="teacher-code-group">
+                                <label for="auth-teacher-code">Lehrer Zugangscode</label>
+                                <input type="password" id="auth-teacher-code" placeholder="Geheimcode (z.B. Azubi2026)">
+                            </div>
                         </div>
+                        
+                        <div class="input-group">
+                            <label for="auth-email">E-Mail</label>
+                            <input type="email" id="auth-email" placeholder="name@domain.de">
+                        </div>
+                        
+                        <div class="input-group">
+                            <label for="auth-password">Passwort</label>
+                            <input type="password" id="auth-password" placeholder="••••••••">
+                        </div>
+                        
+                        <button id="btn-auth-action" class="btn btn-primary w-full" onclick="app.processAuth()">
+                            Einloggen
+                        </button>
                     </div>
-                    
-                    <button class="btn btn-primary w-full" onclick="app.registerStudent()">
-                        Gerät registrieren & Fortfahren
-                    </button>
                 </div>
             </section>
 
-            <!-- 3. STUDENT SCANNER -->
+            <!-- 2. STUDENT SCANNER -->
             <section id="screen-student-scan" class="screen hidden fade-in">
                 <div class="glass-container">
                     <div class="header-split">
                         <h2>Anwesenheit erfassen</h2>
-                        <button class="btn-icon" onclick="app.resetStudent()">⚙️</button>
                     </div>
                     <p>Hallo <strong id="display-student-name"></strong>! Klicke unten, um dich per Face ID zu bestätigen und den Code des Lehrers zu scannen.</p>
                     
@@ -102,61 +102,92 @@
                     <div id="scan-success" class="success-message hidden">
                         <div class="success-icon">✓</div>
                         <h3>Erfolg!</h3>
-                        <p>Anwesenheit für heute erfolgreich übermittelt.</p>
+                        <p>Anwesenheit erfolgreich übermittelt.</p>
                     </div>
                     
                     <button id="btn-start-scan" class="btn btn-primary w-full mt-4" onclick="app.startScanProcess()">
                         Jetzt Scannen (Face ID benötigt)
                     </button>
+                    
+                    <!-- Zeigt an wenn der Student erfolgreich eingescannt wurde -->
+                    <div id="student-history" class="mt-4 hidden p-3 radius-md" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);">
+                        <h4 class="mb-2">Heute eingescannt:</h4>
+                        <p id="student-last-scan-info" class="text-sm"></p>
+                    </div>
                 </div>
             </section>
 
-            <!-- 4. TEACHER DASHBOARD -->
+            <!-- 3. TEACHER DASHBOARD -->
             <section id="screen-teacher-dashboard" class="screen hidden fade-in">
-                <div class="glass-container">
-                    <button class="back-btn" onclick="app.showScreen('screen-role-select')">← Zurück</button>
-                    <h2>Lehrer Dashboard</h2>
-                    
-                    <div class="dashboard-controls">
-                        <div class="session-box">
-                            <div>
-                                <small>Aktueller QR-Code Code</small>
-                                <h3 id="current-session-id">Nicht gestartet</h3>
-                            </div>
-                            <button class="btn btn-primary" onclick="app.generateNewSession()">Neue Sitzung</button>
-                        </div>
-                        
-                        <div id="qr-display-container" class="qr-display hidden glass-panel">
-                            <!-- In a real app we'd render a real QR code canvas here -->
-                            <div class="qr-placeholder" id="qr-code-canvas"></div>
-                            <p class="mt-2 text-sm text-center">Bitte diesen Code von den Schülern scannen lassen.</p>
-                        </div>
-                    </div>
-
-                    <div class="attendance-list-section mt-4">
-                        <div class="header-split">
-                            <h3><span id="attendance-count">0</span> Anwesende</h3>
-                            <button class="btn btn-secondary btn-small" onclick="app.sendEmailList()">Per E-Mail senden</button>
-                        </div>
-                        
-                        <ul id="attendance-list" class="styled-list mt-2">
-                            <li class="empty-state">Noch niemand eingecheckt.</li>
+                <div class="dashboard-layout">
+                    <!-- Sidebar: Past Sessions -->
+                    <aside class="dashboard-sidebar glass-panel">
+                        <h3>Sitzungen</h3>
+                        <ul id="past-sessions-list" class="styled-list sessions-list mt-2">
+                            <li class="empty-state text-sm">Keine Sitzungen gefunden.</li>
                         </ul>
+                    </aside>
+                    
+                    <!-- Main Area: Current Session Details -->
+                    <div class="dashboard-main glass-container">
+                        <h2>Dashboard</h2>
+                        
+                        <!-- Create New Session Widget -->
+                        <div class="create-session-widget mb-4 glass-panel p-3">
+                            <div class="input-group">
+                                <label for="course-name">Kurs / Bezeichnung</label>
+                                <input type="text" id="course-name" placeholder="z.B. GP-10">
+                            </div>
+                            <button class="btn btn-primary" onclick="app.generateNewSession()">Neue Sitzung Starten</button>
+                        </div>
+                        
+                        <!-- Active Session Info -->
+                        <div id="active-session-view" class="hidden">
+                            <div class="header-split mb-2">
+                                <div>
+                                    <small>Aktuelle Ansicht</small>
+                                    <h3 id="current-session-id" class="text-gradient"></h3>
+                                </div>
+                                <div id="qr-display-container" class="qr-micro-display glass-panel" onclick="app.toggleQrFullscreen()">
+                                    <div id="qr-code-canvas"></div>
+                                    <div class="text-xs text-center mt-1">Vergrößern</div>
+                                </div>
+                            </div>
+
+                            <div class="attendance-list-section mt-4" id="exportable-area">
+                                <div class="header-split">
+                                    <h3><span id="attendance-count">0</span> Anwesende<br><small class="text-xs text-gray" id="session-date-display"></small></h3>
+                                    <div style="display:flex; gap:10px;">
+                                        <button class="btn btn-secondary btn-small" onclick="app.addStudentManuallyPrompt()">+ Manuell</button>
+                                        <button class="btn btn-primary btn-small" onclick="app.exportListPdf()">Als PDF & Mail</button>
+                                    </div>
+                                </div>
+                                
+                                <ul id="attendance-list" class="styled-list mt-2">
+                                    <li class="empty-state">Noch niemand eingecheckt.</li>
+                                </ul>
+                            </div>
+                            
+                            <button class="btn btn-danger btn-small mt-4 w-full" onclick="app.deleteCurrentSession()">Diese Sitzung löschen</button>
+                        </div>
                     </div>
                 </div>
             </section>
             
         </main>
+        
+        <!-- QR Fullscreen Modal -->
+        <div id="qr-modal" class="modal-overlay hidden" onclick="app.toggleQrFullscreen()">
+            <div class="modal-content glass-panel text-center" onclick="event.stopPropagation()">
+                <div id="qr-code-canvas-large" class="mb-4"></div>
+                <h2 id="qr-modal-course-name"></h2>
+                <p>Bitte scannen um Anwesenheit zu vermerken.</p>
+                <button class="btn btn-secondary mt-4" onclick="app.toggleQrFullscreen()">Schließen</button>
+            </div>
+        </div>
+        
     </div>
 
-    <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
-    <script src="https://unpkg.com/html5-qrcode"></script>
-    
-    <!-- Firebase -->
-    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-database-compat.js"></script>
-    
     <script src="app.js"></script>
 </body>
 </html>
