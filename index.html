@@ -59,6 +59,30 @@
                                 </select>
                             </div>
                             
+                            <div class="input-group" id="student-course-group">
+                                <label for="auth-course">Kurs (nur Azubis)</label>
+                                <select id="auth-course">
+                                    <option value="GP-8">GP-8</option>
+                                    <option value="GP-9">GP-9</option>
+                                    <option value="GP-10">GP-10</option>
+                                    <option value="GP-11">GP-11</option>
+                                    <option value="GP-12">GP-12</option>
+                                    <option value="GP-13">GP-13</option>
+                                    <option value="GP-14">GP-14</option>
+                                    <option value="GP-15">GP-15</option>
+                                    <option value="GP-16">GP-16</option>
+                                    <option value="GP-17">GP-17</option>
+                                    <option value="GP-18">GP-18</option>
+                                    <option value="GP-19">GP-19</option>
+                                    <option value="GP-20">GP-20</option>
+                                    <option value="GP-21">GP-21</option>
+                                    <option value="GP-22">GP-22</option>
+                                    <option value="GP-23">GP-23</option>
+                                    <option value="GP-24">GP-24</option>
+                                    <option value="GP-25">GP-25</option>
+                                </select>
+                            </div>
+                            
                             <div class="input-group">
                                 <label for="auth-name">Vor- und Nachname</label>
                                 <input type="text" id="auth-name" placeholder="z.B. Max Mustermann">
@@ -110,36 +134,82 @@
                     </button>
                     
                     <!-- Zeigt an wenn der Student erfolgreich eingescannt wurde -->
-                    <div id="student-history" class="mt-4 hidden p-3 radius-md" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);">
-                        <h4 class="mb-2">Heute eingescannt:</h4>
-                        <p id="student-last-scan-info" class="text-sm"></p>
+                    <div id="student-history" class="mt-4 p-3 radius-md" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);">
+                        <div class="header-split mb-2">
+                            <h4>Meine Anwesenheiten</h4>
+                            <div class="text-sm">Gesamt: <strong id="student-total-hours" class="text-gradient">0 h</strong></div>
+                        </div>
+                        <ul id="student-blocks-list" class="styled-list">
+                            <!-- Block summaries generated here -->
+                        </ul>
                     </div>
                 </div>
             </section>
 
             <!-- 3. TEACHER DASHBOARD -->
             <section id="screen-teacher-dashboard" class="screen hidden fade-in">
-                <div class="dashboard-layout">
-                    <!-- Sidebar: Past Sessions -->
-                    <aside class="dashboard-sidebar glass-panel">
-                        <h3>Sitzungen</h3>
-                        <ul id="past-sessions-list" class="styled-list sessions-list mt-2">
-                            <li class="empty-state text-sm">Keine Sitzungen gefunden.</li>
-                        </ul>
-                    </aside>
-                    
-                    <!-- Main Area: Current Session Details -->
-                    <div class="dashboard-main glass-container">
-                        <h2>Dashboard</h2>
+                <div class="dashboard-tabs glass-panel mb-4" style="display:flex; padding:0; overflow:hidden;">
+                    <button class="auth-tab active" id="tab-btn-sessions" onclick="app.switchTeacherTab('sessions')">Blöcke / Sitzungen</button>
+                    <button class="auth-tab" id="tab-btn-students" onclick="app.switchTeacherTab('students')">Azubi-Verwaltung</button>
+                </div>
+
+                <!-- TABS CONTENT -->
+                <div id="teacher-tab-sessions">
+                    <div class="dashboard-layout">
+                        <!-- Sidebar: Past Sessions -->
+                        <aside class="dashboard-sidebar glass-panel">
+                            <h3>Block-Sitzungen</h3>
+                            <ul id="past-sessions-list" class="styled-list sessions-list mt-2">
+                                <li class="empty-state text-sm">Keine Sitzungen gefunden.</li>
+                            </ul>
+                        </aside>
                         
-                        <!-- Create New Session Widget -->
-                        <div class="create-session-widget mb-4 glass-panel p-3">
-                            <div class="input-group">
-                                <label for="course-name">Kurs / Bezeichnung</label>
-                                <input type="text" id="course-name" placeholder="z.B. GP-10">
+                        <!-- Main Area: Current Session Details -->
+                        <div class="dashboard-main glass-container">
+                            <h2>Sitzungs-Verwaltung</h2>
+                            
+                            <!-- Create New Session Widget -->
+                            <div class="create-session-widget mb-4 glass-panel p-3">
+                                <h3>Neuen Block starten</h3>
+                                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <div class="input-group" style="margin: 0.5rem 0;">
+                                        <label for="course-name">Kurs</label>
+                                        <select id="course-name">
+                                            <option value="GP-8">GP-8</option>
+                                            <option value="GP-9">GP-9</option>
+                                            <option value="GP-10">GP-10</option>
+                                            <option value="GP-11">GP-11</option>
+                                            <option value="GP-12">GP-12</option>
+                                            <option value="GP-13">GP-13</option>
+                                            <option value="GP-14">GP-14</option>
+                                            <option value="GP-15">GP-15</option>
+                                            <option value="GP-16">GP-16</option>
+                                            <option value="GP-17">GP-17</option>
+                                            <option value="GP-18">GP-18</option>
+                                            <option value="GP-19">GP-19</option>
+                                            <option value="GP-20">GP-20</option>
+                                            <option value="GP-21">GP-21</option>
+                                            <option value="GP-22">GP-22</option>
+                                            <option value="GP-23">GP-23</option>
+                                            <option value="GP-24">GP-24</option>
+                                            <option value="GP-25">GP-25</option>
+                                        </select>
+                                    </div>
+                                    <div class="input-group" style="margin: 0.5rem 0;">
+                                        <label for="block-number">Blocknummer</label>
+                                        <input type="number" id="block-number" placeholder="z.B. 6" min="1">
+                                    </div>
+                                    <div class="input-group" style="margin: 0.5rem 0;">
+                                        <label for="start-date">Startdatum</label>
+                                        <input type="date" id="start-date">
+                                    </div>
+                                    <div class="input-group" style="margin: 0.5rem 0;">
+                                        <label for="end-date">Enddatum</label>
+                                        <input type="date" id="end-date">
+                                    </div>
+                                </div>
+                                <button class="btn btn-primary mt-2 w-full" onclick="app.generateNewSession()">Block Erstellen</button>
                             </div>
-                            <button class="btn btn-primary" onclick="app.generateNewSession()">Neue Sitzung Starten</button>
-                        </div>
                         
                         <!-- Active Session Info -->
                         <div id="active-session-view" class="hidden">
@@ -156,10 +226,9 @@
 
                             <div class="attendance-list-section mt-4" id="exportable-area">
                                 <div class="header-split">
-                                    <h3><span id="attendance-count">0</span> Anwesende<br><small class="text-xs text-gray" id="session-date-display"></small></h3>
+                                    <h3><span id="attendance-count">0</span> Anwesende Heute<br><small class="text-xs text-gray" id="session-date-display"></small></h3>
                                     <div style="display:flex; gap:10px;">
-                                        <button class="btn btn-secondary btn-small" onclick="app.addStudentManuallyPrompt()">+ Manuell</button>
-                                        <button class="btn btn-primary btn-small" onclick="app.exportListPdf()">Als PDF & Mail</button>
+                                        <!-- Manuell is moved to student management tab -->
                                     </div>
                                 </div>
                                 
@@ -168,11 +237,110 @@
                                 </ul>
                             </div>
                             
-                            <button class="btn btn-danger btn-small mt-4 w-full" onclick="app.deleteCurrentSession()">Diese Sitzung löschen</button>
+                            <button class="btn btn-danger btn-small mt-4 w-full" onclick="app.deleteCurrentSession()">Diesen Block löschen</button>
                         </div>
                     </div>
                 </div>
+
+                <div id="teacher-tab-students" class="hidden">
+                    <div class="glass-container">
+                        <div class="header-split mb-4">
+                            <h2>Azubi-Verwaltung</h2>
+                            <div>
+                                <select id="student-filter-course" style="padding: 0.5rem; border-radius: 0.5rem; background: var(--secondary); color: white; border: 1px solid var(--glass-border);" onchange="app.renderStudentList()">
+                                    <option value="all">Alle Kurse</option>
+                                    <option value="GP-8">GP-8</option>
+                                    <option value="GP-9">GP-9</option>
+                                    <option value="GP-10">GP-10</option>
+                                    <option value="GP-11">GP-11</option>
+                                    <option value="GP-12">GP-12</option>
+                                    <option value="GP-13">GP-13</option>
+                                    <option value="GP-14">GP-14</option>
+                                    <option value="GP-15">GP-15</option>
+                                    <option value="GP-16">GP-16</option>
+                                    <option value="GP-17">GP-17</option>
+                                    <option value="GP-18">GP-18</option>
+                                    <option value="GP-19">GP-19</option>
+                                    <option value="GP-20">GP-20</option>
+                                    <option value="GP-21">GP-21</option>
+                                    <option value="GP-22">GP-22</option>
+                                    <option value="GP-23">GP-23</option>
+                                    <option value="GP-24">GP-24</option>
+                                    <option value="GP-25">GP-25</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <ul id="admin-student-list" class="styled-list">
+                            <li class="empty-state">Keine Schüler gefunden.</li>
+                        </ul>
+                    </div>
+                </div>
             </section>
+            
+            <!-- Student Management Modal -->
+            <div id="student-modal" class="modal-overlay hidden" onclick="app.closeStudentModal()">
+                <div class="modal-content glass-panel" onclick="event.stopPropagation()">
+                    <h2 id="modal-student-name">Schüler Name</h2>
+                    <p id="modal-student-email" class="text-sm mb-4"></p>
+                    
+                    <div class="input-group">
+                        <label>Kurs ändern</label>
+                        <div style="display:flex; gap:10px;">
+                            <select id="modal-student-course" style="flex:1;">
+                                <!-- Will be filled dynamically or same as above -->
+                                <option value="GP-8">GP-8</option>
+                                <option value="GP-9">GP-9</option>
+                                <option value="GP-10">GP-10</option>
+                                <option value="GP-11">GP-11</option>
+                                <option value="GP-12">GP-12</option>
+                                <option value="GP-13">GP-13</option>
+                                <option value="GP-14">GP-14</option>
+                                <option value="GP-15">GP-15</option>
+                                <option value="GP-16">GP-16</option>
+                                <option value="GP-17">GP-17</option>
+                                <option value="GP-18">GP-18</option>
+                                <option value="GP-19">GP-19</option>
+                                <option value="GP-20">GP-20</option>
+                                <option value="GP-21">GP-21</option>
+                                <option value="GP-22">GP-22</option>
+                                <option value="GP-23">GP-23</option>
+                                <option value="GP-24">GP-24</option>
+                                <option value="GP-25">GP-25</option>
+                            </select>
+                            <button class="btn btn-primary btn-small" onclick="app.saveStudentCourse()">Speichern</button>
+                        </div>
+                    </div>
+                    
+                    <hr style="border-color: var(--glass-border); margin: 1.5rem 0;">
+                    
+                    <h3>Anwesenheit manuell nachtragen</h3>
+                    <div class="input-group">
+                        <label>Block auswählen</label>
+                        <select id="modal-manual-session"></select>
+                    </div>
+                    <div class="input-group">
+                        <label>Datum</label>
+                        <input type="date" id="modal-manual-date">
+                    </div>
+                    <div class="input-group">
+                        <label>Zeit erfassen (wird als Scan-Zeit gewertet)</label>
+                        <input type="time" id="modal-manual-time" value="07:15">
+                    </div>
+                    <button class="btn btn-secondary w-full" onclick="app.addManualAttendance()">Eintragen</button>
+
+                    <hr style="border-color: var(--glass-border); margin: 1.5rem 0;">
+                    
+                    <button class="btn btn-primary w-full" onclick="app.exportStudentPdf()">Azubi-Report als PDF exportieren</button>
+
+                    <div style="text-align:center; margin-top:1rem;">
+                        <button class="btn btn-secondary btn-small" onclick="app.closeStudentModal()">Schließen</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hidden container for Student PDF Export -->
+            <div id="student-pdf-export-container" style="display:none;"></div>
             
         </main>
         

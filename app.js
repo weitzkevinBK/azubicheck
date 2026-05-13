@@ -11,7 +11,6 @@ const firebaseConfig = {
     appId: "1:517410461228:web:0a836cb5594d6b7db76389"
 };
 
-// Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
 const auth = firebase.auth();
@@ -19,10 +18,11 @@ const auth = firebase.auth();
 class FirebaseDB {
     constructor() {}
 
-    async createUserProfile(uid, name, role) {
+    async createUserProfile(uid, name, role, course) {
         await database.ref(`users/${uid}`).set({
             name: name,
-            role: role
+            role: role,
+            course: course || null
         });
     }
 
@@ -30,15 +30,26 @@ class FirebaseDB {
         const snap = await database.ref(`users/${uid}`).once('value');
         return snap.val();
     }
+    
+    async getAllStudents() {
+        const snap = await database.ref('users').orderByChild('role').equalTo('student').once('value');
+        return snap.val() || {};
+    }
 
-    async createSession(teacherUid, courseName) {
-        // Generate code
+    async updateStudentCourse(uid, newCourse) {
+        await database.ref(`users/${uid}/course`).set(newCourse);
+    }
+
+    async createSession(teacherUid, courseName, blockNumber, startDate, endDate) {
         const code = Math.random().toString(36).substring(2, 7).toUpperCase();
-        const sessionId = `Sitzung-${code}`;
+        const sessionId = `Block-${code}`;
         
         await database.ref(`sessions/${sessionId}`).set({
             createdBy: teacherUid,
             courseName: courseName || "Unbenannt",
+            blockNumber: blockNumber || "1",
+            startDate: startDate,
+            endDate: endDate,
             createdAt: firebase.database.ServerValue.TIMESTAMP,
             attendances: {}
         });
@@ -50,22 +61,22 @@ class FirebaseDB {
         await database.ref(`sessions/${sessionId}`).remove();
     }
     
-    async addAttendance(sessionId, studentUid, studentName) {
-        await database.ref(`sessions/${sessionId}/attendances/${studentUid}`).set({
+    async addAttendance(sessionId, studentUid, studentName, dateStr, timestamp, hours) {
+        await database.ref(`sessions/${sessionId}/attendances/${dateStr}/${studentUid}`).set({
             name: studentName,
-            time: firebase.database.ServerValue.TIMESTAMP
+            time: timestamp,
+            hours: hours
         });
     }
     
-    async removeAttendance(sessionId, studentUid) {
-        await database.ref(`sessions/${sessionId}/attendances/${studentUid}`).remove();
+    async removeAttendance(sessionId, dateStr, studentUid) {
+        await database.ref(`sessions/${sessionId}/attendances/${dateStr}/${studentUid}`).remove();
     }
 
     listenToSessionsForTeacher(teacherUid, callback) {
         const ref = database.ref('sessions').orderByChild('createdBy').equalTo(teacherUid);
         ref.on('value', (snapshot) => {
             const data = snapshot.val() || {};
-            // Sort by createdAt descending
             const sorted = Object.entries(data).sort((a,b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
             callback(sorted);
         });
@@ -79,9 +90,72 @@ class FirebaseDB {
         });
         return ref;
     }
+
+    async getMySessions(uid) {
+        const snap = await database.ref('sessions').once('value');
+        const allSessions = snap.val() || {};
+        const mySessions = {};
+        
+        for(let sid in allSessions) {
+            const session = allSessions[sid];
+            if(session.attendances) {
+                let attendedInThisBlock = false;
+                for(let dateStr in session.attendances) {
+                    if(session.attendances[dateStr][uid]) {
+                        attendedInThisBlock = true;
+                        break;
+                    }
+                }
+                if(attendedInThisBlock) {
+                    mySessions[sid] = session;
+                }
+            }
+        }
+        return mySessions;
+    }
 }
 
 const db = new FirebaseDB();
+
+// ==========================================
+// TIME CALCULATION HELPERS
+// ==========================================
+function calculateHours(scanDateObj) {
+    // Wochenende prüfen
+    const day = scanDateObj.getDay();
+    if(day === 0 || day === 6) return 0; // Kein Blockunterricht am Wochenende
+    
+    const isFriday = (day === 5);
+    const endHour = isFriday ? 12 : 14;
+    const endMin = 15;
+    
+    const scanHour = scanDateObj.getHours();
+    const scanMin = scanDateObj.getMinutes();
+    
+    let startHour = scanHour;
+    let startMin = scanMin;
+    
+    // If before or exactly 08:00
+    if (scanHour < 8 || (scanHour === 8 && scanMin === 0)) {
+        startHour = 7;
+        startMin = 15;
+    }
+    
+    const startTimeDecimal = startHour + (startMin / 60);
+    const endTimeDecimal = endHour + (endMin / 60);
+    
+    let duration = endTimeDecimal - startTimeDecimal;
+    if (duration < 0) duration = 0;
+    
+    return duration > 0 ? duration + 1 : 0; // +1 Stunde
+}
+
+function formatDateStr(dateObj) {
+    const y = dateObj.getFullYear();
+    const m = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+    const d = dateObj.getDate().toString().padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
 
 // ==========================================
 // MAIN APP CONTROLLER
@@ -90,28 +164,29 @@ const AppController = {
     currentUser: null,
     userProfile: null,
     
-    currentAuthMode: 'login', // 'login' or 'register'
+    currentAuthMode: 'login',
     html5QrCode: null,
     
-    activeSessionId: null, // Teacher's currently viewed session
+    activeSessionId: null,
     activeSessionRef: null,
     teacherSessionsListener: null,
+    
+    allStudents: {},
+    selectedStudentUid: null,
+    teacherSessionsData: [],
 
     init() {
-        // Update online indicator
         const indicator = document.getElementById('header-status');
         if(navigator.onLine) indicator.classList.add('online');
         
-        // Listen to Auth state
         auth.onAuthStateChanged(async (user) => {
             if (user) {
                 this.currentUser = user;
-                // Fetch profile
                 try {
                     const profile = await db.getUserProfile(user.uid);
                     if(profile) {
                         this.userProfile = profile;
-                        document.getElementById('user-info-text').innerText = `${profile.name} (${profile.role === 'teacher' ? 'Lehrer' : 'Azubi'})`;
+                        document.getElementById('user-info-text').innerText = `${profile.name} (${profile.role === 'teacher' ? 'Lehrer' : 'Azubi' + (profile.course ? ' - ' + profile.course : '')})`;
                         document.getElementById('btn-logout').classList.remove('hidden');
                         
                         if(profile.role === 'teacher') {
@@ -120,9 +195,9 @@ const AppController = {
                         } else {
                             this.showScreen('screen-student-scan');
                             document.getElementById('display-student-name').innerText = profile.name;
+                            this.renderStudentHistory();
                         }
                     } else {
-                        // Edge case: Auth exists but no profile
                         console.error("Profil nicht in DB gefunden");
                         auth.signOut();
                     }
@@ -137,7 +212,6 @@ const AppController = {
                 this.showScreen('screen-auth');
                 this.switchAuthTab('login');
                 
-                // Cleanup listeners
                 if(this.teacherSessionsListener) this.teacherSessionsListener.off();
                 if(this.activeSessionRef) this.activeSessionRef.off();
             }
@@ -190,8 +264,10 @@ const AppController = {
         const role = document.getElementById('auth-role').value;
         if(role === 'teacher') {
             document.getElementById('teacher-code-group').classList.remove('hidden');
+            document.getElementById('student-course-group').classList.add('hidden');
         } else {
             document.getElementById('teacher-code-group').classList.add('hidden');
+            document.getElementById('student-course-group').classList.remove('hidden');
         }
     },
     
@@ -214,6 +290,7 @@ const AppController = {
             } else {
                 const role = document.getElementById('auth-role').value;
                 const selectedName = document.getElementById('auth-name').value.trim();
+                let course = null;
                 
                 if(!selectedName) {
                     alert("Bitte Namen eingeben.");
@@ -226,11 +303,12 @@ const AppController = {
                         alert("Lehrer Geheimcode ist falsch!");
                         btn.disabled = false; btn.innerText = "Registrieren"; return;
                     }
+                } else {
+                    course = document.getElementById('auth-course').value;
                 }
                 
-                // Register
                 const cred = await auth.createUserWithEmailAndPassword(email, pw);
-                await db.createUserProfile(cred.user.uid, selectedName, role);
+                await db.createUserProfile(cred.user.uid, selectedName, role, course);
             }
         } catch (error) {
             console.error("Auth Exception:", error);
@@ -246,23 +324,17 @@ const AppController = {
     // STUDENT LOGIC
     // ==========================================
     async startScanProcess() {
-        // Phase 1: Biometric Verification
         try {
             const challenge = new Uint8Array(32);
             window.crypto.getRandomValues(challenge);
-            
             await navigator.credentials.get({
-                publicKey: {
-                    challenge: challenge,
-                    userVerification: "required"
-                }
+                publicKey: { challenge: challenge, userVerification: "required" }
             });
         } catch(err) {
             const wts = confirm("Lokaler Testlauf? FaceID/Hello Check überspringen und als Erfolg werten?");
             if(!wts) return;
         }
 
-        // Phase 2: Open Camera
         const startBtn = document.getElementById('btn-start-scan');
         const readerEl = document.getElementById('reader-container');
         
@@ -275,11 +347,11 @@ const AppController = {
                 { facingMode: "environment" }, 
                 { fps: 10, qrbox: { width: 250, height: 250 } },
                 (decodedText) => this.onQrCodeScanned(decodedText),
-                (errorMessage) => { /* ignore normal errors */ }
+                (errorMessage) => { }
             );
         } catch(err) {
             console.warn("Kamera Zugriff verweigert:", err);
-            const simStr = prompt("Kamera konnte lokal nicht gestartet werden. Manuelle Eingabe Sitzungs-Code (z.b. Sitzung-XYZ12) um fortzufahren:");
+            const simStr = prompt("Manuelle Eingabe Sitzungs-Code:");
             if(simStr) {
                 this.onQrCodeScanned(simStr);
             } else {
@@ -299,15 +371,26 @@ const AppController = {
         document.getElementById('reader-container').classList.add('hidden');
 
         try {
-            await db.addAttendance(sessionId, this.currentUser.uid, this.userProfile.name);
+            const now = new Date();
+            const dateStr = formatDateStr(now);
+            
+            // Check if already scanned today
+            const sessionData = (await database.ref(`sessions/${sessionId}`).once('value')).val();
+            if(!sessionData) throw new Error("Block nicht gefunden!");
+            
+            if(sessionData.attendances && sessionData.attendances[dateStr] && sessionData.attendances[dateStr][this.currentUser.uid]) {
+                throw new Error("Du bist für heute bereits eingetragen!");
+            }
+            
+            const hours = calculateHours(now);
+            if(hours === 0) {
+                throw new Error("Am Wochenende können keine Zeiten erfasst werden.");
+            }
+
+            await db.addAttendance(sessionId, this.currentUser.uid, this.userProfile.name, dateStr, now.getTime(), hours);
             
             document.getElementById('scan-success').classList.remove('hidden');
-            
-            // Add to student local history text
-            const hist = document.getElementById('student-history');
-            hist.classList.remove('hidden');
-            const dStr = new Date().toLocaleTimeString('de-DE');
-            document.getElementById('student-last-scan-info').innerText = `Für Sitzung ${sessionId} um ${dStr} Uhr eingecheckt.`;
+            this.renderStudentHistory();
             
             setTimeout(() => {
                 document.getElementById('scan-success').classList.add('hidden');
@@ -319,17 +402,76 @@ const AppController = {
             document.getElementById('btn-start-scan').classList.remove('hidden');
         }
     },
+    
+    async renderStudentHistory() {
+        const uid = this.currentUser.uid;
+        const sessions = await db.getMySessions(uid);
+        
+        const ul = document.getElementById('student-blocks-list');
+        ul.innerHTML = "";
+        
+        let totalHours = 0;
+        
+        const sortedSessions = Object.entries(sessions).sort((a,b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+        
+        if(sortedSessions.length === 0) {
+            ul.innerHTML = '<li class="empty-state">Noch keine Anwesenheiten registriert.</li>';
+        } else {
+            sortedSessions.forEach(([sid, data]) => {
+                let blockHours = 0;
+                let daysCount = 0;
+                
+                if(data.attendances) {
+                    for(let dateStr in data.attendances) {
+                        const rec = data.attendances[dateStr][uid];
+                        if(rec) {
+                            blockHours += rec.hours || 0;
+                            daysCount++;
+                        }
+                    }
+                }
+                
+                totalHours += blockHours;
+                
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <div style="flex:1;">
+                        <div class="list-name">${data.courseName || 'Unbenannt'} - Block ${data.blockNumber || 1}</div>
+                        <div class="list-time">${data.startDate} bis ${data.endDate} • ${daysCount} Tage anwesend</div>
+                    </div>
+                    <div style="font-weight:bold; color:var(--success);">${blockHours.toFixed(2)} h</div>
+                `;
+                ul.appendChild(li);
+            });
+        }
+        
+        document.getElementById('student-total-hours').innerText = `${totalHours.toFixed(2)} h`;
+    },
 
     // ==========================================
     // TEACHER LOGIC
     // ==========================================
+    switchTeacherTab(tabName) {
+        document.getElementById('tab-btn-sessions').classList.toggle('active', tabName === 'sessions');
+        document.getElementById('tab-btn-students').classList.toggle('active', tabName === 'students');
+        
+        if(tabName === 'sessions') {
+            document.getElementById('teacher-tab-sessions').classList.remove('hidden');
+            document.getElementById('teacher-tab-students').classList.add('hidden');
+        } else {
+            document.getElementById('teacher-tab-sessions').classList.add('hidden');
+            document.getElementById('teacher-tab-students').classList.remove('hidden');
+            this.loadStudents();
+        }
+    },
+
     initTeacherDashboard() {
         if(this.teacherSessionsListener) this.teacherSessionsListener.off();
         
         this.teacherSessionsListener = db.listenToSessionsForTeacher(this.currentUser.uid, (sessions) => {
+            this.teacherSessionsData = sessions;
             this.renderSessionsList(sessions);
             
-            // If active session is deleted somehow
             if(this.activeSessionId && !sessions.find(s => s[0] === this.activeSessionId)) {
                 this.closeActiveSession();
             }
@@ -349,13 +491,9 @@ const AppController = {
             const li = document.createElement('li');
             if(sid === this.activeSessionId) li.classList.add('active');
             
-            const dateStr = new Date(data.createdAt).toLocaleDateString();
-            const timeStr = new Date(data.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            const count = data.attendances ? Object.keys(data.attendances).length : 0;
-            
             li.innerHTML = `
-                <div style="font-weight:600">${data.courseName}</div>
-                <div style="font-size:0.8rem; color:var(--text-muted)">${dateStr} ${timeStr} • ${count} Pers.</div>
+                <div style="font-weight:600">${data.courseName} (Block ${data.blockNumber || '-'})</div>
+                <div style="font-size:0.8rem; color:var(--text-muted)">${data.startDate || '?'} - ${data.endDate || '?'}</div>
             `;
             li.onclick = () => this.openSession(sid);
             ul.appendChild(li);
@@ -363,10 +501,18 @@ const AppController = {
     },
 
     async generateNewSession() {
-        const cName = document.getElementById('course-name').value.trim() || 'Neue Sitzung';
+        const cName = document.getElementById('course-name').value;
+        const bNum = document.getElementById('block-number').value;
+        const sDate = document.getElementById('start-date').value;
+        const eDate = document.getElementById('end-date').value;
+        
+        if(!cName || !bNum || !sDate || !eDate) {
+            alert("Bitte alle Felder ausfüllen!");
+            return;
+        }
+        
         try {
-            const sid = await db.createSession(this.currentUser.uid, cName);
-            document.getElementById('course-name').value = '';
+            const sid = await db.createSession(this.currentUser.uid, cName, bNum, sDate, eDate);
             this.openSession(sid);
         } catch(e) {
             alert("Fehler beim Erstellen der Sitzung: " + e.message);
@@ -377,14 +523,11 @@ const AppController = {
         this.activeSessionId = sessionId;
         document.getElementById('active-session-view').classList.remove('hidden');
         
-        // Highlight active left
         const lis = document.querySelectorAll('#past-sessions-list li');
         lis.forEach(li => li.classList.remove('active'));
-        // (will be updated via listenToSessionsForTeacher anyway eventually)
         
         if(this.activeSessionRef) this.activeSessionRef.off();
         
-        // Listen to this specific session closely
         this.activeSessionRef = db.listenToSession(sessionId, (data) => {
             if(!data) return;
             this.renderActiveSessionUI(sessionId, data);
@@ -400,11 +543,11 @@ const AppController = {
     },
     
     renderActiveSessionUI(sid, data) {
-        document.getElementById('current-session-id').innerText = data.courseName + " ("+sid+")";
-        document.getElementById('qr-modal-course-name').innerText = data.courseName;
+        document.getElementById('current-session-id').innerText = `${data.courseName} - Block ${data.blockNumber}`;
+        document.getElementById('qr-modal-course-name').innerText = `${data.courseName} - Block ${data.blockNumber}`;
         
-        const dateStr = new Date(data.createdAt).toLocaleString();
-        document.getElementById('session-date-display').innerText = dateStr;
+        const todayStr = formatDateStr(new Date());
+        document.getElementById('session-date-display').innerText = `Heute: ${todayStr}`;
         
         // Render QR
         const canvasContainers = [document.getElementById('qr-code-canvas'), document.getElementById('qr-code-canvas-large')];
@@ -417,20 +560,21 @@ const AppController = {
             });
         });
         
-        // Render Attendances
-        const listObj = data.attendances || {};
-        const entries = Object.entries(listObj);
+        // Render Attendances for TODAY
+        const allAttendances = data.attendances || {};
+        const todayAttendances = allAttendances[todayStr] || {};
+        const entries = Object.entries(todayAttendances);
+        
         document.getElementById('attendance-count').innerText = entries.length;
         
         const ul = document.getElementById('attendance-list');
         ul.innerHTML = "";
         
         if(entries.length === 0) {
-            ul.innerHTML = `<li class="empty-state">Noch niemand eingecheckt.</li>`;
+            ul.innerHTML = `<li class="empty-state">Noch niemand eingecheckt (Heute).</li>`;
             return;
         }
 
-        // Sort by time
         entries.sort((a,b) => a[1].time - b[1].time).forEach(([studentUid, record]) => {
             const li = document.createElement('li');
             const d = new Date(record.time);
@@ -439,9 +583,9 @@ const AppController = {
             li.innerHTML = `
                 <div class="flex-grow-1" style="flex:1;">
                     <div class="list-name">${record.name}</div>
-                    <div class="list-time">${displayTime}</div>
+                    <div class="list-time">Scan: ${displayTime} | Gewertet: ${(record.hours || 0).toFixed(2)}h</div>
                 </div>
-                <button class="btn-icon" style="color:var(--danger)" onclick="app.removeStudentFromSession('${studentUid}')" title="Entfernen">✕</button>
+                <button class="btn-icon" style="color:var(--danger)" onclick="app.removeStudentFromSession('${sid}', '${todayStr}', '${studentUid}')" title="Entfernen">✕</button>
             `;
             ul.appendChild(li);
         });
@@ -458,79 +602,223 @@ const AppController = {
     
     async deleteCurrentSession() {
         if(!this.activeSessionId) return;
-        if(confirm("Möchtest du diese Sitzung wirklich unwiderruflich löschen?")) {
+        if(confirm("Möchtest du diesen kompletten Block wirklich unwiderruflich löschen?")) {
             await db.deleteSession(this.activeSessionId);
             this.closeActiveSession();
         }
     },
     
-    async addStudentManuallyPrompt() {
-        if(!this.activeSessionId) return;
-        const name = prompt("Name des Schülers eingeben, der manuell hinzugefügt werden soll:");
-        if(!name) return;
+    async removeStudentFromSession(sid, dateStr, studentUid) {
+        if(confirm("Diesen Eintrag wirklich entfernen?")) {
+            await db.removeAttendance(sid, dateStr, studentUid);
+        }
+    },
+
+    // ==========================================
+    // STUDENT MANAGEMENT (TEACHER TAB 2)
+    // ==========================================
+    async loadStudents() {
+        this.allStudents = await db.getAllStudents();
+        this.renderStudentList();
+    },
+
+    renderStudentList() {
+        const filterCourse = document.getElementById('student-filter-course').value;
+        const ul = document.getElementById('admin-student-list');
+        ul.innerHTML = "";
+
+        const entries = Object.entries(this.allStudents);
+        if(entries.length === 0) {
+            ul.innerHTML = `<li class="empty-state">Keine Schüler gefunden.</li>`;
+            return;
+        }
+
+        let count = 0;
+        entries.forEach(([uid, data]) => {
+            if(filterCourse !== 'all' && data.course !== filterCourse) return;
+            count++;
+            
+            const li = document.createElement('li');
+            li.style.cursor = 'pointer';
+            li.innerHTML = `
+                <div>
+                    <div style="font-weight:600">${data.name}</div>
+                    <div class="text-sm text-muted">Kurs: ${data.course || 'Keiner'}</div>
+                </div>
+                <div>→</div>
+            `;
+            li.onclick = () => this.openStudentModal(uid, data);
+            ul.appendChild(li);
+        });
         
-        // Use a random uid for manual entries to avoid collision
-        const manualUid = "manual-" + Math.random().toString(36).substr(2, 9);
+        if(count === 0) {
+            ul.innerHTML = `<li class="empty-state">Keine Schüler im Kurs ${filterCourse}.</li>`;
+        }
+    },
+
+    openStudentModal(uid, data) {
+        this.selectedStudentUid = uid;
+        document.getElementById('modal-student-name').innerText = data.name;
+        document.getElementById('modal-student-email').innerText = `Kurs: ${data.course || 'Keiner'}`;
+        if(data.course) {
+            document.getElementById('modal-student-course').value = data.course;
+        }
+        
+        // Populate manual block select
+        const sessionSelect = document.getElementById('modal-manual-session');
+        sessionSelect.innerHTML = "";
+        this.teacherSessionsData.forEach(([sid, sData]) => {
+            const opt = document.createElement('option');
+            opt.value = sid;
+            opt.innerText = `${sData.courseName} - Block ${sData.blockNumber}`;
+            sessionSelect.appendChild(opt);
+        });
+
+        document.getElementById('student-modal').classList.remove('hidden');
+    },
+
+    closeStudentModal() {
+        document.getElementById('student-modal').classList.add('hidden');
+        this.selectedStudentUid = null;
+    },
+
+    async saveStudentCourse() {
+        if(!this.selectedStudentUid) return;
+        const newCourse = document.getElementById('modal-student-course').value;
         try {
-            await db.addAttendance(this.activeSessionId, manualUid, name + " (Manuell)");
+            await db.updateStudentCourse(this.selectedStudentUid, newCourse);
+            this.allStudents[this.selectedStudentUid].course = newCourse;
+            this.renderStudentList();
+            document.getElementById('modal-student-email').innerText = `Kurs: ${newCourse}`;
+            alert("Kurs erfolgreich aktualisiert.");
         } catch(e) {
             alert("Fehler: " + e.message);
         }
     },
-    
-    async removeStudentFromSession(studentUid) {
-        if(!this.activeSessionId) return;
-        if(confirm("Diesen Eintrag wirklich entfernen?")) {
-            await db.removeAttendance(this.activeSessionId, studentUid);
+
+    async addManualAttendance() {
+        if(!this.selectedStudentUid) return;
+        const sid = document.getElementById('modal-manual-session').value;
+        const dateStr = document.getElementById('modal-manual-date').value;
+        const timeStr = document.getElementById('modal-manual-time').value;
+        
+        if(!sid || !dateStr || !timeStr) {
+            alert("Bitte Block, Datum und Zeit eingeben.");
+            return;
+        }
+
+        try {
+            // Create a pseudo Date object for the calculation
+            const parts = dateStr.split('-');
+            const tParts = timeStr.split(':');
+            const fakeDate = new Date(parts[0], parts[1]-1, parts[2], tParts[0], tParts[1]);
+            
+            const hours = calculateHours(fakeDate);
+            if(hours === 0) {
+                alert("Am Wochenende können keine Zeiten erfasst werden.");
+                return;
+            }
+
+            const sName = this.allStudents[this.selectedStudentUid].name;
+            await db.addAttendance(sid, this.selectedStudentUid, sName + " (Manuell)", dateStr, fakeDate.getTime(), hours);
+            alert("Manuelle Anwesenheit gespeichert!");
+        } catch(e) {
+            alert("Fehler: " + e.message);
         }
     },
 
-    async exportListPdf() {
-        if(!this.activeSessionId) return;
+    async exportStudentPdf() {
+        if(!this.selectedStudentUid) return;
         
-        // Use html2pdf.js
-        const element = document.getElementById('exportable-area');
-        // create a clone to strip out buttons
-        const clone = element.cloneNode(true);
-        // Remove buttons
-        clone.querySelectorAll('button').forEach(b => b.remove());
+        const uid = this.selectedStudentUid;
+        const studentName = this.allStudents[uid].name;
+        const sessions = await db.getMySessions(uid);
         
-        // Make body white for print
-        clone.style.background = 'white';
-        clone.style.color = 'black';
-        clone.style.padding = '20px';
-        clone.style.borderRadius = '0';
+        let html = `
+            <div style="font-family: Arial, sans-serif; padding: 20px; color: black; background: white;">
+                <h2>Anwesenheitsreport: ${studentName}</h2>
+                <hr>
+        `;
         
-        clone.querySelectorAll('.empty-state').forEach(el => el.style.color = 'black');
-        clone.querySelectorAll('.list-time').forEach(el => el.style.color = '#555');
+        const sortedSessions = Object.entries(sessions).sort((a,b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
+        
+        let superTotal = 0;
+        
+        if(sortedSessions.length === 0) {
+            html += `<p>Keine Anwesenheiten gefunden.</p>`;
+        } else {
+            sortedSessions.forEach(([sid, data]) => {
+                html += `
+                    <div style="margin-top: 20px; border: 1px solid #ccc; padding: 10px; border-radius: 5px;">
+                        <h3>${data.courseName} - Block ${data.blockNumber} (${data.startDate} bis ${data.endDate})</h3>
+                        <table style="width:100%; border-collapse: collapse; margin-top:10px;">
+                            <tr style="background:#f0f0f0;">
+                                <th style="text-align:left; border:1px solid #ccc; padding:5px;">Datum</th>
+                                <th style="text-align:left; border:1px solid #ccc; padding:5px;">Scan-Zeit</th>
+                                <th style="text-align:left; border:1px solid #ccc; padding:5px;">Gewertete Stunden</th>
+                            </tr>
+                `;
+                
+                let blockTotal = 0;
+                
+                if(data.attendances) {
+                    const sortedDates = Object.keys(data.attendances).sort();
+                    sortedDates.forEach(dateStr => {
+                        const rec = data.attendances[dateStr][uid];
+                        if(rec) {
+                            const d = new Date(rec.time);
+                            const t = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+                            const h = rec.hours || 0;
+                            blockTotal += h;
+                            html += `
+                                <tr>
+                                    <td style="border:1px solid #ccc; padding:5px;">${dateStr}</td>
+                                    <td style="border:1px solid #ccc; padding:5px;">${t} Uhr</td>
+                                    <td style="border:1px solid #ccc; padding:5px;">${h.toFixed(2)} h</td>
+                                </tr>
+                            `;
+                        }
+                    });
+                }
+                
+                superTotal += blockTotal;
+                
+                html += `
+                        </table>
+                        <p style="text-align:right; font-weight:bold; margin-top:10px;">Block Gesamt: ${blockTotal.toFixed(2)} h</p>
+                    </div>
+                `;
+            });
+        }
+        
+        html += `
+            <h2 style="text-align:right; margin-top: 20px; color: #10b981;">Gesamtstunden: ${superTotal.toFixed(2)} h</h2>
+            </div>
+        `;
+        
+        const container = document.getElementById('student-pdf-export-container');
+        container.innerHTML = html;
+        container.style.display = 'block'; // Make it visible for html2pdf to render properly but keep it off-screen ideally
+        container.style.position = 'absolute';
+        container.style.left = '-9999px';
         
         const opt = {
           margin:       0.5,
-          filename:     `Anwesenheit_${this.activeSessionId}.pdf`,
+          filename:     `Anwesenheit_${studentName.replace(/\\s+/g, '_')}.pdf`,
           image:        { type: 'jpeg', quality: 0.98 },
           html2canvas:  { scale: 2 },
           jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
         };
 
-        const worker = html2pdf().from(clone).set(opt);
-        
-        // Save PDF
+        const worker = html2pdf().from(container).set(opt);
         await worker.save();
         
-        // Also open Mailto
-        // Fetch current session data to extract names (already in DOM, but cleaner from memory)
-        const items = document.querySelectorAll('#attendance-list .list-name');
-        let body = `Details im Anhang. \n\nAnwesende (${items.length}):\n`;
-        items.forEach(i => body += `- ${i.innerText}\n`);
-        
-        const cName = document.getElementById('current-session-id').innerText;
-        window.location.href = `mailto:?subject=Anwesenheitsliste ${cName}&body=${encodeURIComponent(body)}`;
+        container.innerHTML = "";
     }
 };
 
 window.app = AppController;
 
-// Init when DOM loads
 document.addEventListener('DOMContentLoaded', () => {
     AppController.init();
 });
