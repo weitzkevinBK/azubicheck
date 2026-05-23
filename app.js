@@ -640,37 +640,28 @@ const AppController = {
 
     renderStudentList() {
         try {
-            const filterCourse = document.getElementById('student-filter-course').value;
-            const ul = document.getElementById('admin-student-list');
-            ul.innerHTML = `<li style="background:red; color:white; padding:10px; font-weight:bold;">TEST: renderStudentList gestartet! Filter=${filterCourse}</li>`;
-
-            const entries = Object.entries(this.allStudents);
-            if(entries.length === 0) {
-                ul.innerHTML += `<li class="empty-state">Keine Schüler gefunden.</li>`;
-                return;
-            }
-
-            let count = 0;
-            entries.forEach(([uid, data]) => {
-                if(filterCourse !== 'all' && data.course !== filterCourse) return;
-                count++;
-                
-                const li = document.createElement('li');
-                li.style.cursor = 'pointer';
-                li.innerHTML = `
-                    <div>
-                        <div style="font-weight:600">${data.name}</div>
-                        <div class="text-sm text-muted">Kurs: ${data.course || 'Keiner'}</div>
-                    </div>
-                    <div>→</div>
-                `;
-                li.onclick = () => this.openStudentModal(uid, data);
-                ul.appendChild(li);
-            });
+            const tabStudents = document.getElementById('teacher-tab-students');
             
-            if(count === 0) {
-                ul.innerHTML = `<li class="empty-state">Keine Schüler im Kurs ${filterCourse}.</li>`;
-            }
+            // Nuclear debug dump
+            const debugDiv = document.createElement('div');
+            debugDiv.style.padding = '20px';
+            debugDiv.style.background = 'red';
+            debugDiv.style.color = 'white';
+            debugDiv.style.marginTop = '20px';
+            debugDiv.style.borderRadius = '10px';
+            
+            const entries = Object.entries(this.allStudents);
+            debugDiv.innerHTML = `<h3>DEBUG DUMP</h3><p>Anzahl Azubis im Speicher: ${entries.length}</p>`;
+            
+            let listHtml = "<ul>";
+            entries.forEach(([uid, data]) => {
+                listHtml += `<li>${data.name} (Kurs: ${data.course})</li>`;
+            });
+            listHtml += "</ul>";
+            
+            debugDiv.innerHTML += listHtml;
+            tabStudents.appendChild(debugDiv);
+
         } catch(e) {
             alert("Fehler beim Rendern der Azubi-Liste: " + e.message);
         }
