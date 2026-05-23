@@ -36,16 +36,11 @@ class FirebaseDB {
             const snap = await database.ref('users').once('value');
             const allUsers = snap.val() || {};
             const students = {};
-            let totalUsers = 0;
-            let totalStudents = 0;
             for (let uid in allUsers) {
-                totalUsers++;
                 if (allUsers[uid].role === 'student') {
                     students[uid] = allUsers[uid];
-                    totalStudents++;
                 }
             }
-            alert(`Debug: ${totalUsers} Nutzer in DB gefunden. Davon ${totalStudents} Azubis.`);
             return students;
         } catch(e) {
             console.error("Fehler beim Laden der Schüler:", e);
@@ -641,36 +636,40 @@ const AppController = {
     },
 
     renderStudentList() {
-        const filterCourse = document.getElementById('student-filter-course').value;
-        const ul = document.getElementById('admin-student-list');
-        ul.innerHTML = "";
+        try {
+            const filterCourse = document.getElementById('student-filter-course').value;
+            const ul = document.getElementById('admin-student-list');
+            ul.innerHTML = "";
 
-        const entries = Object.entries(this.allStudents);
-        if(entries.length === 0) {
-            ul.innerHTML = `<li class="empty-state">Keine Schüler gefunden.</li>`;
-            return;
-        }
+            const entries = Object.entries(this.allStudents);
+            if(entries.length === 0) {
+                ul.innerHTML = `<li class="empty-state">Keine Schüler gefunden.</li>`;
+                return;
+            }
 
-        let count = 0;
-        entries.forEach(([uid, data]) => {
-            if(filterCourse !== 'all' && data.course !== filterCourse) return;
-            count++;
+            let count = 0;
+            entries.forEach(([uid, data]) => {
+                if(filterCourse !== 'all' && data.course !== filterCourse) return;
+                count++;
+                
+                const li = document.createElement('li');
+                li.style.cursor = 'pointer';
+                li.innerHTML = `
+                    <div>
+                        <div style="font-weight:600">${data.name}</div>
+                        <div class="text-sm text-muted">Kurs: ${data.course || 'Keiner'}</div>
+                    </div>
+                    <div>→</div>
+                `;
+                li.onclick = () => this.openStudentModal(uid, data);
+                ul.appendChild(li);
+            });
             
-            const li = document.createElement('li');
-            li.style.cursor = 'pointer';
-            li.innerHTML = `
-                <div>
-                    <div style="font-weight:600">${data.name}</div>
-                    <div class="text-sm text-muted">Kurs: ${data.course || 'Keiner'}</div>
-                </div>
-                <div>→</div>
-            `;
-            li.onclick = () => this.openStudentModal(uid, data);
-            ul.appendChild(li);
-        });
-        
-        if(count === 0) {
-            ul.innerHTML = `<li class="empty-state">Keine Schüler im Kurs ${filterCourse}.</li>`;
+            if(count === 0) {
+                ul.innerHTML = `<li class="empty-state">Keine Schüler im Kurs ${filterCourse}.</li>`;
+            }
+        } catch(e) {
+            alert("Fehler beim Rendern der Azubi-Liste: " + e.message);
         }
     },
 
