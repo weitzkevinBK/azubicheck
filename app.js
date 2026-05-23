@@ -36,11 +36,16 @@ class FirebaseDB {
             const snap = await database.ref('users').once('value');
             const allUsers = snap.val() || {};
             const students = {};
+            let totalUsers = 0;
+            let totalStudents = 0;
             for (let uid in allUsers) {
+                totalUsers++;
                 if (allUsers[uid].role === 'student') {
                     students[uid] = allUsers[uid];
+                    totalStudents++;
                 }
             }
+            alert(`Debug: ${totalUsers} Nutzer in DB gefunden. Davon ${totalStudents} Azubis.`);
             return students;
         } catch(e) {
             console.error("Fehler beim Laden der Schüler:", e);
