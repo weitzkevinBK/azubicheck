@@ -468,12 +468,20 @@ const AppController = {
         document.getElementById('tab-btn-sessions').classList.toggle('active', tabName === 'sessions');
         document.getElementById('tab-btn-students').classList.toggle('active', tabName === 'students');
         
+        const tabSessions = document.getElementById('teacher-tab-sessions');
+        const tabStudents = document.getElementById('teacher-tab-students');
+
+        if (!tabStudents) {
+            alert("KRITISCHER FEHLER: Das HTML-Element 'teacher-tab-students' existiert nicht in der index.html!");
+            return;
+        }
+
         if(tabName === 'sessions') {
-            document.getElementById('teacher-tab-sessions').classList.remove('hidden');
-            document.getElementById('teacher-tab-students').classList.add('hidden');
+            tabSessions.classList.remove('hidden');
+            tabStudents.classList.add('hidden');
         } else {
-            document.getElementById('teacher-tab-sessions').classList.add('hidden');
-            document.getElementById('teacher-tab-students').classList.remove('hidden');
+            tabSessions.classList.add('hidden');
+            tabStudents.classList.remove('hidden');
             this.loadStudents();
         }
     },
