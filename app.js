@@ -471,17 +471,12 @@ const AppController = {
         const tabSessions = document.getElementById('teacher-tab-sessions');
         const tabStudents = document.getElementById('teacher-tab-students');
 
-        if (!tabStudents) {
-            alert("KRITISCHER FEHLER: Das HTML-Element 'teacher-tab-students' existiert nicht in der index.html!");
-            return;
-        }
-
         if(tabName === 'sessions') {
-            tabSessions.classList.remove('hidden');
-            tabStudents.classList.add('hidden');
+            tabSessions.style.display = 'block';
+            tabStudents.style.display = 'none';
         } else {
-            tabSessions.classList.add('hidden');
-            tabStudents.classList.remove('hidden');
+            tabSessions.style.display = 'none';
+            tabStudents.style.display = 'block';
             this.loadStudents();
         }
     },
