@@ -639,11 +639,11 @@ const AppController = {
         try {
             const filterCourse = document.getElementById('student-filter-course').value;
             const ul = document.getElementById('admin-student-list');
-            ul.innerHTML = "";
+            ul.innerHTML = `<li style="background:red; color:white; padding:10px; font-weight:bold;">TEST: renderStudentList gestartet! Filter=${filterCourse}</li>`;
 
             const entries = Object.entries(this.allStudents);
             if(entries.length === 0) {
-                ul.innerHTML = `<li class="empty-state">Keine Schüler gefunden.</li>`;
+                ul.innerHTML += `<li class="empty-state">Keine Schüler gefunden.</li>`;
                 return;
             }
 
