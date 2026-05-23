@@ -32,8 +32,21 @@ class FirebaseDB {
     }
     
     async getAllStudents() {
-        const snap = await database.ref('users').orderByChild('role').equalTo('student').once('value');
-        return snap.val() || {};
+        try {
+            const snap = await database.ref('users').once('value');
+            const allUsers = snap.val() || {};
+            const students = {};
+            for (let uid in allUsers) {
+                if (allUsers[uid].role === 'student') {
+                    students[uid] = allUsers[uid];
+                }
+            }
+            return students;
+        } catch(e) {
+            console.error("Fehler beim Laden der Schüler:", e);
+            alert("Fehler beim Laden der Schüler: " + e.message);
+            return {};
+        }
     }
 
     async updateStudentCourse(uid, newCourse) {
