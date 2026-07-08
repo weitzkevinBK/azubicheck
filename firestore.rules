@@ -6,63 +6,59 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function userDoc(uid) {
-      return get(/databases/$(database)/documents/users/$(uid));
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function myRole() {
-      return signedIn() && userDoc(request.auth.uid).data.role;
+    function role() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? profile().data.role
+        : null;
     }
 
     function isAdmin() {
-      return myRole() == 'admin';
+      return role() == 'admin';
     }
 
     function isManagement() {
-      return myRole() == 'management' || isAdmin();
+      return role() == 'management' || isAdmin();
     }
 
     function isTeacher() {
-      return myRole() == 'teacher' || isManagement();
+      return role() == 'teacher' || isManagement();
     }
 
     function assignedToCourse(courseId) {
       return isManagement()
-        || (isTeacher() && courseId in userDoc(request.auth.uid).data.assignedCourseIds);
+        || (isTeacher() && courseId in profile().data.assignedCourseIds);
     }
 
     match /users/{userId} {
-      allow read: if signedIn() && (
-        request.auth.uid == userId
-        || isManagement()
-        || (isTeacher() && resource.data.role == 'student' && assignedToCourse(resource.data.courseId))
-      );
+      allow read: if signedIn();
       allow create: if signedIn() && request.auth.uid == userId;
       allow update: if signedIn() && (
-        request.auth.uid == userId && !('role' in request.resource.data.diff(resource.data).changedKeys())
-        || isManagement()
+        isManagement()
+        || (
+          request.auth.uid == userId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.assignedCourseIds == resource.data.assignedCourseIds
+        )
       );
       allow delete: if isAdmin();
     }
 
-    match /courses/{courseId} {
-      allow read: if signedIn();
-      allow write: if isManagement();
-    }
-
     match /blocks/{blockId} {
-      allow read: if signedIn() && assignedToCourse(resource.data.courseId);
+      allow read: if signedIn();
       allow create: if signedIn() && assignedToCourse(request.resource.data.courseId);
       allow update, delete: if signedIn() && assignedToCourse(resource.data.courseId);
     }
 
     match /theoryAttendances/{attendanceId} {
-      allow read: if signedIn() && (
-        request.auth.uid == resource.data.studentId
-        || assignedToCourse(resource.data.courseId)
+      allow read: if signedIn();
+      allow create: if signedIn() && (
+        request.auth.uid == request.resource.data.studentId
+        || assignedToCourse(request.resource.data.courseId)
       );
-      allow create: if signedIn()
-        && request.auth.uid == request.resource.data.studentId;
       allow update: if signedIn() && (
         request.auth.uid == resource.data.studentId
         || assignedToCourse(resource.data.courseId)
@@ -71,16 +67,15 @@ service cloud.firestore {
     }
 
     match /practiceAttendances/{attendanceId} {
-      allow read: if signedIn() && (
-        request.auth.uid == resource.data.studentId
-        || assignedToCourse(resource.data.courseId)
-      );
-      allow write: if signedIn() && assignedToCourse(request.resource.data.courseId);
+      allow read: if signedIn();
+      allow create: if signedIn() && assignedToCourse(request.resource.data.courseId);
+      allow update, delete: if signedIn() && assignedToCourse(resource.data.courseId);
     }
 
     match /dayOverrides/{overrideId} {
-      allow read: if signedIn() && assignedToCourse(resource.data.courseId);
-      allow write: if signedIn() && assignedToCourse(request.resource.data.courseId);
+      allow read: if signedIn();
+      allow create: if signedIn() && assignedToCourse(request.resource.data.courseId);
+      allow update, delete: if signedIn() && assignedToCourse(resource.data.courseId);
     }
   }
 }

@@ -4,7 +4,8 @@ MVP fuer Anwesenheiten, Fehlzeiten und Blockverwaltung im Schulalltag.
 
 ## Aktueller Stand
 
-Die App laeuft aktuell im lokalen Demo-Modus mit `localStorage`.
+Die App laeuft ohne Firebase-Konfiguration im lokalen Demo-Modus mit `localStorage`.
+Sobald die `VITE_FIREBASE_*` Variablen gesetzt sind, nutzt sie Firebase Auth und Firestore.
 
 Demo-Logins:
 
@@ -43,14 +44,17 @@ npm run build
 
 ## Firebase
 
-Die Datei `.env.example` zeigt die benoetigten Variablen fuer Firebase.
+Die Datei `.env.example` zeigt die benoetigten Variablen fuer Firebase. Lokal gehoeren die Werte in `.env.local`.
 
-Geplante Produktanbindung:
+Aktuelle Produktanbindung:
 
-- Firebase Auth fuer echte Accounts
-- Firestore fuer Users, Kurse, Bloecke, Theorie-/Praxisanwesenheiten
+- Firebase Auth fuer echte Accounts mit E-Mail und Passwort
+- Firestore fuer Users, Bloecke, Theorie-/Praxisanwesenheiten und Tageskorrekturen
 - Firestore Security Rules aus `firestore.rules`
 - Passwort-Reset per Firebase Auth Reset-Mail
+
+Beim ersten registrierten Firebase-Account wird automatisch die Rolle `admin` vergeben, damit ein frisches Projekt
+nicht ohne Verwaltungszugang startet.
 
 ## Vercel
 

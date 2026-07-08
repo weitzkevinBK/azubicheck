@@ -10,6 +10,22 @@ import {
   UserCog,
   Users,
 } from 'lucide-react'
+import {
+  auth,
+  collection,
+  createUserWithEmailAndPassword,
+  db,
+  doc,
+  firebaseEnabled,
+  getDocs,
+  onAuthStateChanged,
+  onSnapshot,
+  sendPasswordResetEmail,
+  setDoc,
+  signInWithEmailAndPassword,
+  signOut,
+  updateDoc,
+} from './firebase'
 import './App.css'
 
 const courses = Array.from({ length: 18 }, (_, index) => `GP-${index + 8}`)
@@ -113,6 +129,34 @@ function saveStore(store) {
   localStorage.setItem('azubicheck:mvp', JSON.stringify(store))
 }
 
+const collectionMap = {
+  users: 'users',
+  blocks: 'blocks',
+  theoryAttendances: 'theoryAttendances',
+  practiceAttendances: 'practiceAttendances',
+  dayOverrides: 'dayOverrides',
+}
+
+function emptyStore() {
+  return {
+    users: [],
+    blocks: [],
+    theoryAttendances: [],
+    practiceAttendances: [],
+    dayOverrides: [],
+  }
+}
+
+function mergeCollection(store, key, docs) {
+  return { ...store, [key]: docs }
+}
+
+async function isFirstFirebaseUser() {
+  if (!firebaseEnabled) return false
+  const snapshot = await getDocs(collection(db, collectionMap.users))
+  return snapshot.empty
+}
+
 function dateDiffDays(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00`)
   const end = new Date(`${endDate}T00:00:00`)
@@ -171,8 +215,10 @@ function summarizeStudent(store, student) {
 }
 
 function App() {
-  const [store, setStore] = useState(loadStore)
-  const [currentUserId, setCurrentUserId] = useState(localStorage.getItem('azubicheck:user') || '')
+  const [store, setStore] = useState(firebaseEnabled ? emptyStore : loadStore)
+  const [currentUserId, setCurrentUserId] = useState(firebaseEnabled ? '' : localStorage.getItem('azubicheck:user') || '')
+  const [authUser, setAuthUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(firebaseEnabled)
   const [authMode, setAuthMode] = useState('login')
   const [selectedCourse, setSelectedCourse] = useState('GP-12')
   const [selectedStudentId, setSelectedStudentId] = useState('')
@@ -181,11 +227,41 @@ function App() {
   const [checkoutContext, setCheckoutContext] = useState(null)
   const [message, setMessage] = useState('')
 
-  useEffect(() => saveStore(store), [store])
   useEffect(() => {
+    if (!firebaseEnabled) saveStore(store)
+  }, [store])
+  useEffect(() => {
+    if (firebaseEnabled) return
     if (currentUserId) localStorage.setItem('azubicheck:user', currentUserId)
     else localStorage.removeItem('azubicheck:user')
   }, [currentUserId])
+
+  useEffect(() => {
+    if (!firebaseEnabled) return undefined
+    return onAuthStateChanged(auth, (user) => {
+      setAuthUser(user)
+      setCurrentUserId(user?.uid || '')
+      setAuthLoading(false)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!firebaseEnabled || !authUser) {
+      if (firebaseEnabled) setStore(emptyStore())
+      return undefined
+    }
+
+    const unsubscribers = Object.entries(collectionMap).map(([key, name]) =>
+      onSnapshot(collection(db, name), (snapshot) => {
+        const docs = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+        setStore((previous) => mergeCollection(previous, key, docs))
+      }, () => {
+        setMessage('Firebase-Daten konnten nicht geladen werden. Prüfe Firestore und die Sicherheitsregeln.')
+      }),
+    )
+
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe())
+  }, [authUser])
 
   const currentUser = store.users.find((user) => user.id === currentUserId)
   const visibleCourses = useMemo(() => {
@@ -212,7 +288,15 @@ function App() {
     })
   }
 
-  function login(email, password) {
+  async function login(email, password) {
+    if (firebaseEnabled) {
+      try {
+        await signInWithEmailAndPassword(auth, email, password)
+      } catch {
+        setMessage('Login nicht gefunden oder Passwort falsch.')
+      }
+      return
+    }
     const user = store.users.find((item) => item.email.toLowerCase() === email.toLowerCase() && item.password === password)
     if (!user || !user.active) {
       setMessage('Login nicht gefunden. Nutze im Demo-Modus demo1234 als Passwort.')
@@ -223,7 +307,29 @@ function App() {
     if (user.role === 'student') setSelectedCourse(user.courseId)
   }
 
-  function registerStudent(form) {
+  async function registerStudent(form) {
+    if (firebaseEnabled) {
+      try {
+        const credential = await createUserWithEmailAndPassword(auth, form.email, form.password)
+        const firstUser = await isFirstFirebaseUser()
+        const role = firstUser ? 'admin' : 'student'
+        const user = {
+          email: form.email,
+          firstName: form.firstName,
+          lastName: form.lastName,
+          role,
+          courseId: role === 'student' ? form.courseId : '',
+          assignedCourseIds: role === 'admin' ? courses : [],
+          active: true,
+          createdAt: new Date().toISOString(),
+        }
+        await setDoc(doc(db, collectionMap.users, credential.user.uid), user)
+        setSelectedCourse(user.courseId || user.assignedCourseIds[0] || 'GP-12')
+      } catch (error) {
+        setMessage(error.code === 'auth/email-already-in-use' ? 'Diese E-Mail ist bereits registriert.' : 'Registrierung konnte nicht abgeschlossen werden.')
+      }
+      return
+    }
     const exists = store.users.some((item) => item.email.toLowerCase() === form.email.toLowerCase())
     if (exists) {
       setMessage('Diese E-Mail ist bereits registriert.')
@@ -245,14 +351,16 @@ function App() {
     setSelectedCourse(user.courseId)
   }
 
-  function logout() {
+  async function logout() {
+    if (firebaseEnabled) await signOut(auth)
     setCurrentUserId('')
     setMessage('')
   }
 
-  function createBlock(form) {
+  async function createBlock(form) {
+    const id = createId('block')
     const block = {
-      id: createId('block'),
+      id,
       courseId: form.courseId,
       type: form.type,
       blockNumber: form.blockNumber,
@@ -261,10 +369,17 @@ function App() {
       qrToken: '',
       createdBy: currentUser.id,
       active: true,
+      createdAt: new Date().toISOString(),
     }
-    block.qrToken = `AZUBICHECK:${block.id}`
+    block.qrToken = `AZUBICHECK:${id}`
+    if (firebaseEnabled) {
+      await setDoc(doc(db, collectionMap.blocks, id), block)
+      setActiveBlockId(id)
+      setMessage('Block wurde erstellt.')
+      return
+    }
     updateStore((draft) => draft.blocks.unshift(block))
-    setActiveBlockId(block.id)
+    setActiveBlockId(id)
     setMessage('Block wurde erstellt.')
   }
 
@@ -306,20 +421,27 @@ function App() {
       (item) => item.blockId === block.id && item.studentId === currentUser.id && item.date === date,
     )
     if (!existing) {
+      const attendance = {
+        id: createId('theory'),
+        blockId: block.id,
+        courseId: block.courseId,
+        studentId: currentUser.id,
+        date,
+        checkInTime: nowTime(),
+        checkOutTime: '',
+        checkoutChoice: '',
+        calculatedHours: 0,
+        adjustedHours: 0,
+        status: 'checked-in',
+        createdAt: new Date().toISOString(),
+      }
+      if (firebaseEnabled) {
+        await setDoc(doc(db, collectionMap.theoryAttendances, attendance.id), attendance)
+        setMessage('Anwesenheit erfasst. Bitte am Unterrichtsende erneut scannen.')
+        return
+      }
       updateStore((draft) => {
-        draft.theoryAttendances.push({
-          id: createId('theory'),
-          blockId: block.id,
-          courseId: block.courseId,
-          studentId: currentUser.id,
-          date,
-          checkInTime: nowTime(),
-          checkOutTime: '',
-          checkoutChoice: '',
-          calculatedHours: 0,
-          adjustedHours: 0,
-          status: 'checked-in',
-        })
+        draft.theoryAttendances.push(attendance)
       })
       setMessage('Anwesenheit erfasst. Bitte am Unterrichtsende erneut scannen.')
       return
@@ -331,32 +453,67 @@ function App() {
     setCheckoutContext({ attendanceId: existing.id, blockId: block.id })
   }
 
-  function finishCheckout(choice) {
+  async function finishCheckout(choice) {
     if (!checkoutContext) return
     if (choice === 'cancelled') {
       setCheckoutContext(null)
       return
     }
+    const attendance = store.theoryAttendances.find((item) => item.id === checkoutContext.attendanceId)
+    const block = store.blocks.find((item) => item.id === checkoutContext.blockId)
+    const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === attendance.date)
+    const patch = {
+      checkOutTime: nowTime(),
+      checkoutChoice: choice,
+      status: 'checked-out',
+      updatedAt: new Date().toISOString(),
+    }
+    patch.calculatedHours = calculateTheoryHours({
+      checkInTime: attendance.checkInTime,
+      checkOutTime: patch.checkOutTime,
+      override,
+      choice,
+    })
+    patch.adjustedHours = patch.calculatedHours
+    if (firebaseEnabled) {
+      await updateDoc(doc(db, collectionMap.theoryAttendances, attendance.id), patch)
+      setCheckoutContext(null)
+      setMessage(choice === 'classEnded' ? 'Unterrichtsende gemeldet.' : 'Du wurdest abgemeldet.')
+      return
+    }
     updateStore((draft) => {
-      const attendance = draft.theoryAttendances.find((item) => item.id === checkoutContext.attendanceId)
-      const block = draft.blocks.find((item) => item.id === checkoutContext.blockId)
-      const override = draft.dayOverrides.find((item) => item.blockId === block.id && item.date === attendance.date)
-      attendance.checkOutTime = nowTime()
-      attendance.checkoutChoice = choice
-      attendance.calculatedHours = calculateTheoryHours({
-        checkInTime: attendance.checkInTime,
-        checkOutTime: attendance.checkOutTime,
-        override,
-        choice,
-      })
-      attendance.adjustedHours = attendance.calculatedHours
-      attendance.status = 'checked-out'
+      const draftAttendance = draft.theoryAttendances.find((item) => item.id === checkoutContext.attendanceId)
+      Object.assign(draftAttendance, patch)
     })
     setCheckoutContext(null)
     setMessage(choice === 'classEnded' ? 'Unterrichtsende gemeldet.' : 'Du wurdest abgemeldet.')
   }
 
-  function savePracticeHours(blockId, studentId, actualHours) {
+  async function savePracticeHours(blockId, studentId, actualHours) {
+    const existing = store.practiceAttendances.find((item) => item.blockId === blockId && item.studentId === studentId)
+    if (firebaseEnabled) {
+      if (existing) {
+        await updateDoc(doc(db, collectionMap.practiceAttendances, existing.id), {
+          actualHours: Number(actualHours || 0),
+          enteredAt: new Date().toISOString(),
+          enteredBy: currentUser.id,
+        })
+      } else {
+        const block = store.blocks.find((item) => item.id === blockId)
+        const id = createId('practice')
+        await setDoc(doc(db, collectionMap.practiceAttendances, id), {
+          id,
+          blockId,
+          courseId: block.courseId,
+          studentId,
+          actualHours: Number(actualHours || 0),
+          note: '',
+          enteredBy: currentUser.id,
+          enteredAt: new Date().toISOString(),
+        })
+      }
+      return
+    }
     updateStore((draft) => {
       const existing = draft.practiceAttendances.find((item) => item.blockId === blockId && item.studentId === studentId)
       if (existing) {
@@ -378,7 +535,44 @@ function App() {
     })
   }
 
-  function addManualTheoryAttendance(blockId, studentId, values) {
+  async function addManualTheoryAttendance(blockId, studentId, values) {
+    const block = store.blocks.find((item) => item.id === blockId)
+    const override = store.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
+    const calculatedHours = values.fullCredit
+      ? Number(override?.fullCreditHours || 8)
+      : calculateTheoryHours({
+          checkInTime: values.checkInTime,
+          checkOutTime: values.checkOutTime,
+          override,
+          choice: 'leftEarly',
+        })
+    const existing = store.theoryAttendances.find(
+      (item) => item.blockId === blockId && item.studentId === studentId && item.date === values.date,
+    )
+    const record = {
+      blockId,
+      courseId: block.courseId,
+      studentId,
+      date: values.date,
+      checkInTime: values.checkInTime,
+      checkOutTime: values.checkOutTime,
+      checkoutChoice: values.fullCredit ? 'teacherManualFullDay' : 'teacherManual',
+      calculatedHours,
+      adjustedHours: values.hours === '' ? calculatedHours : Number(values.hours),
+      status: 'manual',
+      enteredBy: currentUser.id,
+      enteredAt: new Date().toISOString(),
+    }
+
+    if (firebaseEnabled) {
+      if (existing) await updateDoc(doc(db, collectionMap.theoryAttendances, existing.id), record)
+      else {
+        const id = createId('theory')
+        await setDoc(doc(db, collectionMap.theoryAttendances, id), { id, ...record })
+      }
+      setMessage('Theorie-Anwesenheit wurde manuell nachgetragen.')
+      return
+    }
     updateStore((draft) => {
       const block = draft.blocks.find((item) => item.id === blockId)
       const override = draft.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
@@ -415,7 +609,28 @@ function App() {
     setMessage('Theorie-Anwesenheit wurde manuell nachgetragen.')
   }
 
-  function saveOverride(blockId, date, patch) {
+  async function saveOverride(blockId, date, patch) {
+    const existing = store.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
+    const block = store.blocks.find((item) => item.id === blockId)
+    if (firebaseEnabled) {
+      if (existing) await updateDoc(doc(db, collectionMap.dayOverrides, existing.id), patch)
+      else {
+        const id = createId('override')
+        await setDoc(doc(db, collectionMap.dayOverrides, id), {
+          id,
+          blockId,
+          courseId: block.courseId,
+          date,
+          officialStartTime: '07:15',
+          officialEndTime: '14:15',
+          fullCreditHours: 8,
+          teacherConfirmedEarlyEnd: false,
+          note: '',
+          ...patch,
+        })
+      }
+      return
+    }
     updateStore((draft) => {
       const existing = draft.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
       if (existing) Object.assign(existing, patch)
@@ -423,6 +638,7 @@ function App() {
         draft.dayOverrides.push({
           id: createId('override'),
           blockId,
+          courseId: block.courseId,
           date,
           officialStartTime: '07:15',
           officialEndTime: '14:15',
@@ -435,11 +651,40 @@ function App() {
     })
   }
 
-  function updateUser(userId, patch) {
+  async function updateUser(userId, patch) {
+    if (firebaseEnabled) {
+      await updateDoc(doc(db, collectionMap.users, userId), patch)
+      return
+    }
     updateStore((draft) => {
       const user = draft.users.find((item) => item.id === userId)
       Object.assign(user, patch)
     })
+  }
+
+  async function resetPassword(email) {
+    if (firebaseEnabled) {
+      await sendPasswordResetEmail(auth, email)
+      setMessage('Passwort-Reset-Mail wurde versendet.')
+      return
+    }
+    alert('Im Firebase-Betrieb wird hier eine Passwort-Reset-Mail versendet.')
+  }
+
+  if (authLoading) {
+    return <main className="auth-page"><section className="auth-card"><h1>AzubiCheck wird geladen</h1></section></main>
+  }
+
+  if (firebaseEnabled && authUser && !currentUser) {
+    return (
+      <main className="auth-page">
+        <section className="auth-card">
+          <h1>Profil wird geladen</h1>
+          <p>Dein Account ist angemeldet, das AzubiCheck-Profil wird aus Firebase geladen.</p>
+          <button className="btn secondary" onClick={logout}>Abmelden</button>
+        </section>
+      </main>
+    )
   }
 
   if (!currentUser) {
@@ -504,6 +749,7 @@ function App() {
           addManualTheoryAttendance={addManualTheoryAttendance}
           saveOverride={saveOverride}
           updateUser={updateUser}
+          resetPassword={resetPassword}
         />
       )}
 
@@ -552,7 +798,11 @@ function AuthScreen({ authMode, setAuthMode, login, registerStudent, message }) 
         </div>
         <form onSubmit={submit}>
           <h1>{authMode === 'login' ? 'Willkommen zurück' : 'Azubi-Account erstellen'}</h1>
-          <p>{authMode === 'login' ? 'Demo-Zugänge: admin@azubicheck.local, lehrer@azubicheck.local, azubi@azubicheck.local. Passwort jeweils demo1234.' : 'Für den MVP registrieren sich Azubis selbst und wählen ihren Kurs.'}</p>
+          <p>
+            {authMode === 'login'
+              ? firebaseEnabled ? 'Melde dich mit deinem Firebase-Account an.' : 'Demo-Zugänge: admin@azubicheck.local, lehrer@azubicheck.local, azubi@azubicheck.local. Passwort jeweils demo1234.'
+              : firebaseEnabled ? 'Der erste registrierte Account wird Admin. Danach legen Admins Rollen und Kursrechte fest.' : 'Für den MVP registrieren sich Azubis selbst und wählen ihren Kurs.'}
+          </p>
           {authMode === 'register' && (
             <div className="form-grid two">
               <label>Vorname<input value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required /></label>
@@ -627,6 +877,7 @@ function StaffDashboard(props) {
     addManualTheoryAttendance,
     saveOverride,
     updateUser,
+    resetPassword,
   } = props
   const [tab, setTab] = useState('students')
   const selectedStudent = store.users.find((user) => user.id === selectedStudentId) || selectedStudents[0]
@@ -675,7 +926,7 @@ function StaffDashboard(props) {
             saveOverride={saveOverride}
           />
         )}
-        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} />}
+        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} resetPassword={resetPassword} />}
       </section>
     </main>
   )
@@ -913,7 +1164,7 @@ function PracticeBlockDetail({ block, store, savePracticeHours }) {
   )
 }
 
-function AdminPanel({ store, currentUser, updateUser }) {
+function AdminPanel({ store, currentUser, updateUser, resetPassword }) {
   const manageable = store.users.filter((user) => user.id !== currentUser.id).sort((a, b) => getName(a).localeCompare(getName(b)))
   return (
     <section className="panel">
@@ -937,7 +1188,7 @@ function AdminPanel({ store, currentUser, updateUser }) {
             ) : (
               <CourseCheckboxes user={user} updateUser={updateUser} />
             )}
-            <button className="btn secondary" onClick={() => alert('Im Firebase-Betrieb wird hier eine Passwort-Reset-Mail versendet.')}>Passwort-Reset</button>
+            <button className="btn secondary" onClick={() => resetPassword(user.email)}>Passwort-Reset</button>
           </div>
         ))}
       </div>
