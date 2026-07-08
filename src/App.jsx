@@ -1,0 +1,969 @@
+import { useEffect, useMemo, useState } from 'react'
+import QRCode from 'qrcode'
+import {
+  AlertTriangle,
+  BookOpen,
+  Check,
+  Clock,
+  Fingerprint,
+  LogOut,
+  UserCog,
+  Users,
+} from 'lucide-react'
+import './App.css'
+
+const courses = Array.from({ length: 18 }, (_, index) => `GP-${index + 8}`)
+const roleLabels = {
+  student: 'Azubi',
+  teacher: 'Lehrer',
+  management: 'Verwaltung',
+  admin: 'Admin',
+}
+
+const todayIso = () => new Date().toISOString().slice(0, 10)
+const nowTime = () => new Date().toTimeString().slice(0, 5)
+
+const seedState = {
+  users: [
+    {
+      id: 'admin-1',
+      email: 'admin@azubicheck.local',
+      password: 'demo1234',
+      firstName: 'Kevin',
+      lastName: 'Weitz',
+      role: 'admin',
+      courseId: '',
+      assignedCourseIds: courses,
+      active: true,
+    },
+    {
+      id: 'teacher-1',
+      email: 'lehrer@azubicheck.local',
+      password: 'demo1234',
+      firstName: 'Mara',
+      lastName: 'Schulte',
+      role: 'teacher',
+      courseId: '',
+      assignedCourseIds: ['GP-12', 'GP-13'],
+      active: true,
+    },
+    {
+      id: 'student-1',
+      email: 'azubi@azubicheck.local',
+      password: 'demo1234',
+      firstName: 'Nina',
+      lastName: 'Becker',
+      role: 'student',
+      courseId: 'GP-12',
+      assignedCourseIds: [],
+      active: true,
+    },
+    {
+      id: 'student-2',
+      email: 'samir@azubicheck.local',
+      password: 'demo1234',
+      firstName: 'Samir',
+      lastName: 'Kaya',
+      role: 'student',
+      courseId: 'GP-12',
+      assignedCourseIds: [],
+      active: true,
+    },
+  ],
+  blocks: [
+    {
+      id: 'block-demo-theory',
+      courseId: 'GP-12',
+      type: 'theory',
+      blockNumber: '6',
+      startDate: todayIso(),
+      endDate: todayIso(),
+      qrToken: 'AZUBICHECK:block-demo-theory',
+      createdBy: 'teacher-1',
+      active: true,
+    },
+    {
+      id: 'block-demo-practice',
+      courseId: 'GP-12',
+      type: 'practice',
+      blockNumber: '7',
+      startDate: todayIso(),
+      endDate: todayIso(),
+      qrToken: 'AZUBICHECK:block-demo-practice',
+      createdBy: 'teacher-1',
+      active: true,
+    },
+  ],
+  theoryAttendances: [],
+  practiceAttendances: [],
+  dayOverrides: [],
+}
+
+function loadStore() {
+  const raw = localStorage.getItem('azubicheck:mvp')
+  if (!raw) return seedState
+  try {
+    return { ...seedState, ...JSON.parse(raw) }
+  } catch {
+    return seedState
+  }
+}
+
+function saveStore(store) {
+  localStorage.setItem('azubicheck:mvp', JSON.stringify(store))
+}
+
+function dateDiffDays(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`)
+  const end = new Date(`${endDate}T00:00:00`)
+  return Math.max(1, Math.floor((end - start) / 86400000) + 1)
+}
+
+function blockWeeks(block) {
+  return Math.max(1, Math.ceil(dateDiffDays(block.startDate, block.endDate) / 7))
+}
+
+function targetHoursForBlock(block) {
+  return blockWeeks(block) * (block.type === 'practice' ? 40 : 38)
+}
+
+function minutesFromTime(time) {
+  const [hours, minutes] = time.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+function calculateTheoryHours({ checkInTime, checkOutTime, override, choice }) {
+  if (choice === 'cancelled') return 0
+  const dayStart = minutesFromTime(override?.officialStartTime || '07:15')
+  const dayEnd = minutesFromTime(override?.officialEndTime || '14:15')
+  const graceEnd = minutesFromTime('07:40')
+  const fullCredit = Number(override?.fullCreditHours || 8)
+  const checkIn = minutesFromTime(checkInTime)
+  const checkOut = checkOutTime ? minutesFromTime(checkOutTime) : dayEnd
+
+  if (override?.teacherConfirmedEarlyEnd) return fullCredit
+  if (checkIn <= graceEnd && checkOut >= minutesFromTime('13:30')) return fullCredit
+
+  const lateMinutes = Math.max(0, checkIn - dayStart)
+  const earlyLeaveMinutes = Math.max(0, dayEnd - checkOut)
+  return Math.max(0, fullCredit - (lateMinutes + earlyLeaveMinutes) / 60)
+}
+
+function createId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function getName(user) {
+  return `${user.lastName}, ${user.firstName}`
+}
+
+function summarizeStudent(store, student) {
+  const studentBlocks = store.blocks.filter((block) => block.courseId === student.courseId && block.active)
+  const target = studentBlocks.reduce((sum, block) => sum + targetHoursForBlock(block), 0)
+  const theory = store.theoryAttendances
+    .filter((entry) => entry.studentId === student.id)
+    .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
+  const practice = store.practiceAttendances
+    .filter((entry) => entry.studentId === student.id)
+    .reduce((sum, entry) => sum + Number(entry.actualHours || 0), 0)
+  const actual = theory + practice
+  return { target, actual, missing: Math.max(0, target - actual) }
+}
+
+function App() {
+  const [store, setStore] = useState(loadStore)
+  const [currentUserId, setCurrentUserId] = useState(localStorage.getItem('azubicheck:user') || '')
+  const [authMode, setAuthMode] = useState('login')
+  const [selectedCourse, setSelectedCourse] = useState('GP-12')
+  const [selectedStudentId, setSelectedStudentId] = useState('')
+  const [activeBlockId, setActiveBlockId] = useState('block-demo-theory')
+  const [scanToken, setScanToken] = useState('AZUBICHECK:block-demo-theory')
+  const [checkoutContext, setCheckoutContext] = useState(null)
+  const [message, setMessage] = useState('')
+
+  useEffect(() => saveStore(store), [store])
+  useEffect(() => {
+    if (currentUserId) localStorage.setItem('azubicheck:user', currentUserId)
+    else localStorage.removeItem('azubicheck:user')
+  }, [currentUserId])
+
+  const currentUser = store.users.find((user) => user.id === currentUserId)
+  const visibleCourses = useMemo(() => {
+    if (!currentUser) return courses
+    if (currentUser.role === 'teacher' || currentUser.role === 'management') {
+      return currentUser.assignedCourseIds?.length ? currentUser.assignedCourseIds : []
+    }
+    return courses
+  }, [currentUser])
+
+  const selectedStudents = useMemo(
+    () =>
+      store.users
+        .filter((user) => user.role === 'student' && user.courseId === selectedCourse && user.active)
+        .sort((a, b) => getName(a).localeCompare(getName(b))),
+    [store.users, selectedCourse],
+  )
+
+  function updateStore(recipe) {
+    setStore((previous) => {
+      const next = structuredClone(previous)
+      recipe(next)
+      return next
+    })
+  }
+
+  function login(email, password) {
+    const user = store.users.find((item) => item.email.toLowerCase() === email.toLowerCase() && item.password === password)
+    if (!user || !user.active) {
+      setMessage('Login nicht gefunden. Nutze im Demo-Modus demo1234 als Passwort.')
+      return
+    }
+    setCurrentUserId(user.id)
+    if (user.role === 'teacher' && user.assignedCourseIds?.[0]) setSelectedCourse(user.assignedCourseIds[0])
+    if (user.role === 'student') setSelectedCourse(user.courseId)
+  }
+
+  function registerStudent(form) {
+    const exists = store.users.some((item) => item.email.toLowerCase() === form.email.toLowerCase())
+    if (exists) {
+      setMessage('Diese E-Mail ist bereits registriert.')
+      return
+    }
+    const user = {
+      id: createId('student'),
+      email: form.email,
+      password: form.password,
+      firstName: form.firstName,
+      lastName: form.lastName,
+      role: 'student',
+      courseId: form.courseId,
+      assignedCourseIds: [],
+      active: true,
+    }
+    updateStore((draft) => draft.users.push(user))
+    setCurrentUserId(user.id)
+    setSelectedCourse(user.courseId)
+  }
+
+  function logout() {
+    setCurrentUserId('')
+    setMessage('')
+  }
+
+  function createBlock(form) {
+    const block = {
+      id: createId('block'),
+      courseId: form.courseId,
+      type: form.type,
+      blockNumber: form.blockNumber,
+      startDate: form.startDate,
+      endDate: form.endDate,
+      qrToken: '',
+      createdBy: currentUser.id,
+      active: true,
+    }
+    block.qrToken = `AZUBICHECK:${block.id}`
+    updateStore((draft) => draft.blocks.unshift(block))
+    setActiveBlockId(block.id)
+    setMessage('Block wurde erstellt.')
+  }
+
+  async function verifyDevice() {
+    if (!window.PublicKeyCredential || !navigator.credentials) {
+      return window.confirm('Demo-Geräteprüfung: Anwesenheit ohne FaceID/Windows Hello fortsetzen?')
+    }
+    try {
+      const challenge = new Uint8Array(32)
+      window.crypto.getRandomValues(challenge)
+      await navigator.credentials.get({
+        publicKey: {
+          challenge,
+          timeout: 30000,
+          userVerification: 'required',
+        },
+      })
+      return true
+    } catch {
+      return window.confirm('Biometrie konnte nicht bestätigt werden. Im Demo-Modus trotzdem fortsetzen?')
+    }
+  }
+
+  async function handleAttendanceScan(token) {
+    if (!currentUser || currentUser.role !== 'student') return
+    const block = store.blocks.find((item) => item.qrToken === token && item.type === 'theory' && item.active)
+    if (!block) {
+      setMessage('QR-Code wurde nicht als aktiver Theorieblock erkannt.')
+      return
+    }
+    if (block.courseId !== currentUser.courseId) {
+      setMessage('Dieser QR-Code gehört nicht zu deinem Kurs.')
+      return
+    }
+    const verified = await verifyDevice()
+    if (!verified) return
+    const date = todayIso()
+    const existing = store.theoryAttendances.find(
+      (item) => item.blockId === block.id && item.studentId === currentUser.id && item.date === date,
+    )
+    if (!existing) {
+      updateStore((draft) => {
+        draft.theoryAttendances.push({
+          id: createId('theory'),
+          blockId: block.id,
+          courseId: block.courseId,
+          studentId: currentUser.id,
+          date,
+          checkInTime: nowTime(),
+          checkOutTime: '',
+          checkoutChoice: '',
+          calculatedHours: 0,
+          adjustedHours: 0,
+          status: 'checked-in',
+        })
+      })
+      setMessage('Anwesenheit erfasst. Bitte am Unterrichtsende erneut scannen.')
+      return
+    }
+    if (existing.status === 'checked-out') {
+      setMessage('Du bist für heute bereits abgemeldet.')
+      return
+    }
+    setCheckoutContext({ attendanceId: existing.id, blockId: block.id })
+  }
+
+  function finishCheckout(choice) {
+    if (!checkoutContext) return
+    if (choice === 'cancelled') {
+      setCheckoutContext(null)
+      return
+    }
+    updateStore((draft) => {
+      const attendance = draft.theoryAttendances.find((item) => item.id === checkoutContext.attendanceId)
+      const block = draft.blocks.find((item) => item.id === checkoutContext.blockId)
+      const override = draft.dayOverrides.find((item) => item.blockId === block.id && item.date === attendance.date)
+      attendance.checkOutTime = nowTime()
+      attendance.checkoutChoice = choice
+      attendance.calculatedHours = calculateTheoryHours({
+        checkInTime: attendance.checkInTime,
+        checkOutTime: attendance.checkOutTime,
+        override,
+        choice,
+      })
+      attendance.adjustedHours = attendance.calculatedHours
+      attendance.status = 'checked-out'
+    })
+    setCheckoutContext(null)
+    setMessage(choice === 'classEnded' ? 'Unterrichtsende gemeldet.' : 'Du wurdest abgemeldet.')
+  }
+
+  function savePracticeHours(blockId, studentId, actualHours) {
+    updateStore((draft) => {
+      const existing = draft.practiceAttendances.find((item) => item.blockId === blockId && item.studentId === studentId)
+      if (existing) {
+        existing.actualHours = Number(actualHours || 0)
+        existing.enteredAt = new Date().toISOString()
+      } else {
+        const block = draft.blocks.find((item) => item.id === blockId)
+        draft.practiceAttendances.push({
+          id: createId('practice'),
+          blockId,
+          courseId: block.courseId,
+          studentId,
+          actualHours: Number(actualHours || 0),
+          note: '',
+          enteredBy: currentUser.id,
+          enteredAt: new Date().toISOString(),
+        })
+      }
+    })
+  }
+
+  function addManualTheoryAttendance(blockId, studentId, values) {
+    updateStore((draft) => {
+      const block = draft.blocks.find((item) => item.id === blockId)
+      const override = draft.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
+      const calculatedHours = values.fullCredit
+        ? Number(override?.fullCreditHours || 8)
+        : calculateTheoryHours({
+            checkInTime: values.checkInTime,
+            checkOutTime: values.checkOutTime,
+            override,
+            choice: 'leftEarly',
+          })
+      const existing = draft.theoryAttendances.find(
+        (item) => item.blockId === blockId && item.studentId === studentId && item.date === values.date,
+      )
+
+      const record = {
+        blockId,
+        courseId: block.courseId,
+        studentId,
+        date: values.date,
+        checkInTime: values.checkInTime,
+        checkOutTime: values.checkOutTime,
+        checkoutChoice: values.fullCredit ? 'teacherManualFullDay' : 'teacherManual',
+        calculatedHours,
+        adjustedHours: values.hours === '' ? calculatedHours : Number(values.hours),
+        status: 'manual',
+        enteredBy: currentUser.id,
+        enteredAt: new Date().toISOString(),
+      }
+
+      if (existing) Object.assign(existing, record)
+      else draft.theoryAttendances.push({ id: createId('theory'), ...record })
+    })
+    setMessage('Theorie-Anwesenheit wurde manuell nachgetragen.')
+  }
+
+  function saveOverride(blockId, date, patch) {
+    updateStore((draft) => {
+      const existing = draft.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
+      if (existing) Object.assign(existing, patch)
+      else {
+        draft.dayOverrides.push({
+          id: createId('override'),
+          blockId,
+          date,
+          officialStartTime: '07:15',
+          officialEndTime: '14:15',
+          fullCreditHours: 8,
+          teacherConfirmedEarlyEnd: false,
+          note: '',
+          ...patch,
+        })
+      }
+    })
+  }
+
+  function updateUser(userId, patch) {
+    updateStore((draft) => {
+      const user = draft.users.find((item) => item.id === userId)
+      Object.assign(user, patch)
+    })
+  }
+
+  if (!currentUser) {
+    return <AuthScreen authMode={authMode} setAuthMode={setAuthMode} login={login} registerStudent={registerStudent} message={message} />
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark">
+            <Fingerprint size={24} />
+          </div>
+          <div>
+            <strong>
+              Azubi<span>Check.</span>
+            </strong>
+            <small>Schulalltag MVP</small>
+          </div>
+        </div>
+        <div className="topbar-actions">
+          <span className="role-pill">{roleLabels[currentUser.role]}</span>
+          <span className="user-chip">{currentUser.firstName} {currentUser.lastName}</span>
+          <button className="icon-button" onClick={logout} title="Logout">
+            <LogOut size={18} />
+          </button>
+        </div>
+      </header>
+
+      {message && (
+        <div className="notice">
+          <Check size={18} />
+          <span>{message}</span>
+          <button onClick={() => setMessage('')}>Schließen</button>
+        </div>
+      )}
+
+      {currentUser.role === 'student' && (
+        <StudentDashboard
+          store={store}
+          student={currentUser}
+          scanToken={scanToken}
+          setScanToken={setScanToken}
+          handleAttendanceScan={handleAttendanceScan}
+        />
+      )}
+
+      {(currentUser.role === 'teacher' || currentUser.role === 'management' || currentUser.role === 'admin') && (
+        <StaffDashboard
+          store={store}
+          currentUser={currentUser}
+          visibleCourses={visibleCourses}
+          selectedCourse={selectedCourse}
+          setSelectedCourse={setSelectedCourse}
+          selectedStudents={selectedStudents}
+          selectedStudentId={selectedStudentId}
+          setSelectedStudentId={setSelectedStudentId}
+          activeBlockId={activeBlockId}
+          setActiveBlockId={setActiveBlockId}
+          createBlock={createBlock}
+          savePracticeHours={savePracticeHours}
+          addManualTheoryAttendance={addManualTheoryAttendance}
+          saveOverride={saveOverride}
+          updateUser={updateUser}
+        />
+      )}
+
+      {checkoutContext && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>Zweiter Scan erkannt</h2>
+            <p>Was soll mit diesem Scan passieren?</p>
+            <div className="modal-actions">
+              <button className="btn secondary" onClick={() => finishCheckout('cancelled')}>Abbrechen</button>
+              <button className="btn warning" onClick={() => finishCheckout('leftEarly')}>Abmelden</button>
+              <button className="btn primary" onClick={() => finishCheckout('classEnded')}>Unterricht beendet</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AuthScreen({ authMode, setAuthMode, login, registerStudent, message }) {
+  const [form, setForm] = useState({
+    email: '',
+    password: '',
+    firstName: '',
+    lastName: '',
+    courseId: 'GP-12',
+  })
+
+  function submit(event) {
+    event.preventDefault()
+    if (authMode === 'login') login(form.email, form.password)
+    else registerStudent(form)
+  }
+
+  return (
+    <main className="auth-page">
+      <section className="auth-card">
+        <div className="brand auth-brand">
+          <div className="brand-mark"><Fingerprint size={24} /></div>
+          <strong>Azubi<span>Check.</span></strong>
+        </div>
+        <div className="tabs">
+          <button className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Einloggen</button>
+          <button className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Registrieren</button>
+        </div>
+        <form onSubmit={submit}>
+          <h1>{authMode === 'login' ? 'Willkommen zurück' : 'Azubi-Account erstellen'}</h1>
+          <p>{authMode === 'login' ? 'Demo-Zugänge: admin@azubicheck.local, lehrer@azubicheck.local, azubi@azubicheck.local. Passwort jeweils demo1234.' : 'Für den MVP registrieren sich Azubis selbst und wählen ihren Kurs.'}</p>
+          {authMode === 'register' && (
+            <div className="form-grid two">
+              <label>Vorname<input value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required /></label>
+              <label>Nachname<input value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required /></label>
+              <label>Kurs<select value={form.courseId} onChange={(event) => setForm({ ...form, courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select></label>
+            </div>
+          )}
+          <label>E-Mail<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>
+          <label>Passwort<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
+          {message && <div className="form-message">{message}</div>}
+          <button className="btn primary full">{authMode === 'login' ? 'Einloggen' : 'Registrieren'}</button>
+        </form>
+      </section>
+    </main>
+  )
+}
+
+function StudentDashboard({ store, student, scanToken, setScanToken, handleAttendanceScan }) {
+  const summary = summarizeStudent(store, student)
+  const entries = store.theoryAttendances
+    .filter((item) => item.studentId === student.id)
+    .map((item) => ({ ...item, block: store.blocks.find((block) => block.id === item.blockId) }))
+    .sort((a, b) => b.date.localeCompare(a.date))
+  return (
+    <main className="dashboard-grid">
+      <section className="panel student-hero">
+        <div>
+          <p className="eyebrow">Mein Kurs</p>
+          <h1>{student.courseId}</h1>
+          <p>Scanne den QR-Code deines Theorieblocks nach der Gerätebestätigung.</p>
+        </div>
+        <div className="scan-card">
+          <Fingerprint size={34} />
+          <label>QR-Code / Demo-Code<input value={scanToken} onChange={(event) => setScanToken(event.target.value)} /></label>
+          <button className="btn primary full" onClick={() => handleAttendanceScan(scanToken)}>Anwesend</button>
+        </div>
+      </section>
+      <StatsCards summary={summary} />
+      <section className="panel span-2">
+        <h2>Meine Anwesenheiten</h2>
+        <div className="table">
+          <div className="row header"><span>Datum</span><span>Block</span><span>Status</span><span>Stunden</span></div>
+          {entries.map((entry) => (
+            <div className="row" key={entry.id}>
+              <span>{entry.date}</span>
+              <span>{entry.block?.courseId} Block {entry.block?.blockNumber}</span>
+              <span>{entry.status === 'checked-out' ? 'Abgeschlossen' : 'Eingecheckt'}</span>
+              <strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong>
+            </div>
+          ))}
+          {!entries.length && <div className="empty">Noch keine Anwesenheiten vorhanden.</div>}
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function StaffDashboard(props) {
+  const {
+    store,
+    currentUser,
+    visibleCourses,
+    selectedCourse,
+    setSelectedCourse,
+    selectedStudents,
+    selectedStudentId,
+    setSelectedStudentId,
+    activeBlockId,
+    setActiveBlockId,
+    createBlock,
+    savePracticeHours,
+    addManualTheoryAttendance,
+    saveOverride,
+    updateUser,
+  } = props
+  const [tab, setTab] = useState('students')
+  const selectedStudent = store.users.find((user) => user.id === selectedStudentId) || selectedStudents[0]
+  const courseBlocks = store.blocks.filter((block) => block.courseId === selectedCourse && block.active)
+  const activeBlock = store.blocks.find((block) => block.id === activeBlockId) || courseBlocks[0]
+
+  useEffect(() => {
+    if (visibleCourses.length && !visibleCourses.includes(selectedCourse)) setSelectedCourse(visibleCourses[0])
+  }, [visibleCourses, selectedCourse, setSelectedCourse])
+
+  return (
+    <main className="staff-layout">
+      <aside className="sidebar panel">
+        <label>Kurs
+          <select value={selectedCourse} onChange={(event) => setSelectedCourse(event.target.value)}>
+            {visibleCourses.map((course) => <option key={course}>{course}</option>)}
+          </select>
+        </label>
+        <nav className="side-nav">
+          <button className={tab === 'students' ? 'active' : ''} onClick={() => setTab('students')}><Users size={18} /> Azubis</button>
+          <button className={tab === 'blocks' ? 'active' : ''} onClick={() => setTab('blocks')}><BookOpen size={18} /> Blöcke</button>
+          {(currentUser.role === 'admin' || currentUser.role === 'management') && (
+            <button className={tab === 'admin' ? 'active' : ''} onClick={() => setTab('admin')}><UserCog size={18} /> Verwaltung</button>
+          )}
+        </nav>
+      </aside>
+      <section className="content">
+        {tab === 'students' && (
+          <StudentOverview
+            store={store}
+            students={selectedStudents}
+            selectedStudent={selectedStudent}
+            setSelectedStudentId={setSelectedStudentId}
+          />
+        )}
+        {tab === 'blocks' && (
+          <BlockManager
+            store={store}
+            selectedCourse={selectedCourse}
+            blocks={courseBlocks}
+            activeBlock={activeBlock}
+            setActiveBlockId={setActiveBlockId}
+            createBlock={createBlock}
+            savePracticeHours={savePracticeHours}
+            addManualTheoryAttendance={addManualTheoryAttendance}
+            saveOverride={saveOverride}
+          />
+        )}
+        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} />}
+      </section>
+    </main>
+  )
+}
+
+function StatsCards({ summary }) {
+  return (
+    <section className="stats">
+      <article className="stat-card"><Clock size={20} /><span>Soll</span><strong>{summary.target.toFixed(2)} h</strong></article>
+      <article className="stat-card"><Check size={20} /><span>Ist</span><strong>{summary.actual.toFixed(2)} h</strong></article>
+      <article className={`stat-card ${summary.missing > 0 ? 'danger' : 'ok'}`}><AlertTriangle size={20} /><span>Fehlzeit</span><strong>{summary.missing.toFixed(2)} h</strong></article>
+    </section>
+  )
+}
+
+function StudentOverview({ store, students, selectedStudent, setSelectedStudentId }) {
+  const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
+  const details = selectedStudent
+    ? [
+        ...store.theoryAttendances.filter((entry) => entry.studentId === selectedStudent.id).map((entry) => ({ ...entry, source: 'Theorie' })),
+        ...store.practiceAttendances.filter((entry) => entry.studentId === selectedStudent.id).map((entry) => ({ ...entry, date: entry.enteredAt?.slice(0, 10), source: 'Praxis', adjustedHours: entry.actualHours })),
+      ].sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    : []
+  return (
+    <div className="split">
+      <section className="panel">
+        <h1>Azubis</h1>
+        <p>Alphabetisch sortiert nach Nachname.</p>
+        <div className="student-list">
+          {students.map((student) => {
+            const row = summarizeStudent(store, student)
+            return (
+              <button key={student.id} className={student.id === selectedStudent?.id ? 'student-row active' : 'student-row'} onClick={() => setSelectedStudentId(student.id)}>
+                <span><strong>{getName(student)}</strong><small>{student.courseId}</small></span>
+                <span>{row.target.toFixed(1)} h</span>
+                <span>{row.actual.toFixed(1)} h</span>
+                <span className={row.missing > 0 ? 'text-danger' : 'text-ok'}>{row.missing.toFixed(1)} h</span>
+              </button>
+            )
+          })}
+          {!students.length && <div className="empty">Keine Azubis in diesem Kurs.</div>}
+        </div>
+      </section>
+      <section className="panel">
+        {selectedStudent && summary ? (
+          <>
+            <h2>{selectedStudent.firstName} {selectedStudent.lastName}</h2>
+            <StatsCards summary={summary} />
+            <h3>Fehlzeiten nach Tagen und Blöcken</h3>
+            <div className="table compact">
+              <div className="row header"><span>Datum</span><span>Quelle</span><span>Status</span><span>Stunden</span></div>
+              {details.map((entry) => (
+                <div className="row" key={entry.id}>
+                  <span>{entry.date}</span>
+                  <span>{entry.source}</span>
+                  <span>{entry.status || 'eingetragen'}</span>
+                  <strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong>
+                </div>
+              ))}
+              {!details.length && <div className="empty">Noch keine Tagesdaten.</div>}
+            </div>
+          </>
+        ) : (
+          <div className="empty">Wähle einen Azubi aus.</div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function BlockManager({ store, selectedCourse, blocks, activeBlock, setActiveBlockId, createBlock, savePracticeHours, addManualTheoryAttendance, saveOverride }) {
+  const [form, setForm] = useState({ courseId: selectedCourse, type: 'theory', blockNumber: '', startDate: todayIso(), endDate: todayIso() })
+  const [qrDataUrl, setQrDataUrl] = useState('')
+
+  useEffect(() => setForm((previous) => ({ ...previous, courseId: selectedCourse })), [selectedCourse])
+  useEffect(() => {
+    if (!activeBlock?.qrToken) {
+      setQrDataUrl('')
+      return
+    }
+    QRCode.toDataURL(activeBlock.qrToken, { width: 280, margin: 1 }).then(setQrDataUrl)
+  }, [activeBlock])
+
+  const earlyEndWarnings = useMemo(() => {
+    if (!activeBlock || activeBlock.type !== 'theory') return []
+    const courseStudents = store.users.filter((user) => user.role === 'student' && user.courseId === activeBlock.courseId)
+    const threshold = Math.floor(courseStudents.length / 2) + 1
+    const grouped = {}
+    store.theoryAttendances
+      .filter((entry) => entry.blockId === activeBlock.id && entry.checkoutChoice === 'classEnded' && minutesFromTime(entry.checkOutTime || '14:15') < minutesFromTime('13:30'))
+      .forEach((entry) => {
+        grouped[entry.date] = (grouped[entry.date] || 0) + 1
+      })
+    return Object.entries(grouped).filter(([, count]) => count >= threshold).map(([date, count]) => ({ date, count, threshold }))
+  }, [activeBlock, store])
+
+  return (
+    <div className="split">
+      <section className="panel">
+        <h1>Blöcke</h1>
+        <form className="block-form" onSubmit={(event) => { event.preventDefault(); createBlock(form) }}>
+          <div className="form-grid two">
+            <label>Art<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="theory">Theorie</option><option value="practice">Praxis</option></select></label>
+            <label>Blocknummer<input value={form.blockNumber} onChange={(event) => setForm({ ...form, blockNumber: event.target.value })} required /></label>
+            <label>Start<input type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label>
+            <label>Ende<input type="date" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} /></label>
+          </div>
+          <button className="btn primary full">Block anlegen</button>
+        </form>
+        <div className="block-list">
+          {blocks.map((block) => (
+            <button key={block.id} className={block.id === activeBlock?.id ? 'block-row active' : 'block-row'} onClick={() => setActiveBlockId(block.id)}>
+              <span><strong>{block.type === 'theory' ? 'Theorie' : 'Praxis'} Block {block.blockNumber}</strong><small>{block.startDate} bis {block.endDate}</small></span>
+              <strong>{targetHoursForBlock(block)} h</strong>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="panel">
+        {activeBlock ? (
+          <>
+            <h2>{activeBlock.courseId} Block {activeBlock.blockNumber}</h2>
+            <p>{activeBlock.type === 'theory' ? 'Theorieblock mit QR-Code' : 'Praxisblock mit manueller Stundenerfassung'} · Soll {targetHoursForBlock(activeBlock)} h</p>
+            {activeBlock.type === 'theory' ? (
+              <TheoryBlockDetail block={activeBlock} qrDataUrl={qrDataUrl} warnings={earlyEndWarnings} saveOverride={saveOverride} addManualTheoryAttendance={addManualTheoryAttendance} store={store} />
+            ) : (
+              <PracticeBlockDetail block={activeBlock} store={store} savePracticeHours={savePracticeHours} />
+            )}
+          </>
+        ) : <div className="empty">Noch kein Block in diesem Kurs.</div>}
+      </section>
+    </div>
+  )
+}
+
+function TheoryBlockDetail({ block, qrDataUrl, warnings, saveOverride, addManualTheoryAttendance, store }) {
+  const [date, setDate] = useState(todayIso())
+  const courseStudents = store.users
+    .filter((user) => user.role === 'student' && user.courseId === block.courseId && user.active)
+    .sort((a, b) => getName(a).localeCompare(getName(b)))
+  const [manualEntry, setManualEntry] = useState({
+    studentId: courseStudents[0]?.id || '',
+    date: todayIso(),
+    checkInTime: '07:15',
+    checkOutTime: '14:15',
+    fullCredit: true,
+    hours: '',
+  })
+  const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date) || {}
+  const entries = store.theoryAttendances.filter((item) => item.blockId === block.id && item.date === date)
+
+  useEffect(() => {
+    if (!manualEntry.studentId && courseStudents[0]?.id) {
+      setManualEntry((previous) => ({ ...previous, studentId: courseStudents[0].id }))
+    }
+  }, [courseStudents, manualEntry.studentId])
+
+  function submitManualEntry(event) {
+    event.preventDefault()
+    if (!manualEntry.studentId) return
+    addManualTheoryAttendance(block.id, manualEntry.studentId, manualEntry)
+    setDate(manualEntry.date)
+  }
+
+  return (
+    <div className="detail-stack">
+      <div className="qr-panel">
+        {qrDataUrl && <img src={qrDataUrl} alt="QR-Code für diesen Block" />}
+        <code>{block.qrToken}</code>
+      </div>
+      {!!warnings.length && warnings.map((warning) => (
+        <div className="danger-box" key={warning.date}>
+          <AlertTriangle size={18} />
+          <span>{warning.count} Meldungen für Unterrichtsende am {warning.date}. Bitte bestätigen.</span>
+          <button onClick={() => saveOverride(block.id, warning.date, { teacherConfirmedEarlyEnd: true, officialEndTime: '12:00', note: 'Frühes Ende bestätigt' })}>Bestätigen</button>
+        </div>
+      ))}
+      <div className="day-editor">
+        <label>Tag<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+        <label>Start<input type="time" value={override.officialStartTime || '07:15'} onChange={(event) => saveOverride(block.id, date, { officialStartTime: event.target.value })} /></label>
+        <label>Ende<input type="time" value={override.officialEndTime || '14:15'} onChange={(event) => saveOverride(block.id, date, { officialEndTime: event.target.value })} /></label>
+        <label className="checkbox"><input type="checkbox" checked={!!override.teacherConfirmedEarlyEnd} onChange={(event) => saveOverride(block.id, date, { teacherConfirmedEarlyEnd: event.target.checked })} /> Voller Tag trotz Sonderzeit</label>
+      </div>
+      <form className="manual-entry-card" onSubmit={submitManualEntry}>
+        <div>
+          <h3>Theorie-Tag manuell nachtragen</h3>
+          <p>Für Azubis ohne Handy oder vergessenen Scan. Ein bestehender Eintrag für denselben Tag wird aktualisiert.</p>
+        </div>
+        <div className="manual-entry-grid">
+          <label>Azubi
+            <select value={manualEntry.studentId} onChange={(event) => setManualEntry({ ...manualEntry, studentId: event.target.value })}>
+              {courseStudents.map((student) => <option value={student.id} key={student.id}>{getName(student)}</option>)}
+            </select>
+          </label>
+          <label>Datum<input type="date" value={manualEntry.date} onChange={(event) => setManualEntry({ ...manualEntry, date: event.target.value })} /></label>
+          <label>Von<input type="time" value={manualEntry.checkInTime} onChange={(event) => setManualEntry({ ...manualEntry, checkInTime: event.target.value })} /></label>
+          <label>Bis<input type="time" value={manualEntry.checkOutTime} onChange={(event) => setManualEntry({ ...manualEntry, checkOutTime: event.target.value })} /></label>
+          <label className="checkbox"><input type="checkbox" checked={manualEntry.fullCredit} onChange={(event) => setManualEntry({ ...manualEntry, fullCredit: event.target.checked })} /> vollen Tag gutschreiben</label>
+          <label>Stunden manuell
+            <input type="number" min="0" step="0.25" value={manualEntry.hours} placeholder="automatisch" onChange={(event) => setManualEntry({ ...manualEntry, hours: event.target.value })} />
+          </label>
+        </div>
+        <button className="btn secondary">Nachtragen</button>
+      </form>
+      <div className="table compact">
+        <div className="row header"><span>Azubi</span><span>In</span><span>Out</span><span>Stunden</span></div>
+        {entries.map((entry) => {
+          const student = store.users.find((user) => user.id === entry.studentId)
+          return <div className="row" key={entry.id}><span>{student ? getName(student) : entry.studentId}</span><span>{entry.checkInTime}</span><span>{entry.checkOutTime || '-'}</span><strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong></div>
+        })}
+        {!entries.length && <div className="empty">Für diesen Tag noch keine Scans.</div>}
+      </div>
+    </div>
+  )
+}
+
+function PracticeBlockDetail({ block, store, savePracticeHours }) {
+  const students = store.users.filter((user) => user.role === 'student' && user.courseId === block.courseId).sort((a, b) => getName(a).localeCompare(getName(b)))
+  return (
+    <div className="table compact">
+      <div className="row header"><span>Azubi</span><span>Soll</span><span>Ist eintragen</span><span>Status</span></div>
+      {students.map((student) => {
+        const existing = store.practiceAttendances.find((entry) => entry.blockId === block.id && entry.studentId === student.id)
+        const actual = existing?.actualHours ?? targetHoursForBlock(block)
+        return (
+          <div className="row" key={student.id}>
+            <span>{getName(student)}</span>
+            <span>{targetHoursForBlock(block)} h</span>
+            <input className="hours-input" type="number" min="0" step="0.25" defaultValue={actual} onBlur={(event) => savePracticeHours(block.id, student.id, event.target.value)} />
+            <span className={Number(actual) >= targetHoursForBlock(block) ? 'text-ok' : 'text-danger'}>{Number(actual) >= targetHoursForBlock(block) ? 'ok' : 'fehlend'}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function AdminPanel({ store, currentUser, updateUser }) {
+  const manageable = store.users.filter((user) => user.id !== currentUser.id).sort((a, b) => getName(a).localeCompare(getName(b)))
+  return (
+    <section className="panel">
+      <h1>Verwaltung</h1>
+      <p>Rollen, Kurszuordnung und Lehrerrechte. Passwort-Reset wird später per Firebase-Mail ausgelöst.</p>
+      <div className="admin-list">
+        {manageable.map((user) => (
+          <div className="admin-row" key={user.id}>
+            <div>
+              <strong>{user.firstName} {user.lastName}</strong>
+              <small>{user.email}</small>
+            </div>
+            <select value={user.role} onChange={(event) => updateUser(user.id, { role: event.target.value })}>
+              <option value="student">Azubi</option>
+              <option value="teacher">Lehrer</option>
+              <option value="management">Verwaltung</option>
+              <option value="admin">Admin</option>
+            </select>
+            {user.role === 'student' ? (
+              <select value={user.courseId} onChange={(event) => updateUser(user.id, { courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select>
+            ) : (
+              <CourseCheckboxes user={user} updateUser={updateUser} />
+            )}
+            <button className="btn secondary" onClick={() => alert('Im Firebase-Betrieb wird hier eine Passwort-Reset-Mail versendet.')}>Passwort-Reset</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function CourseCheckboxes({ user, updateUser }) {
+  const assigned = user.assignedCourseIds || []
+  return (
+    <div className="course-checks">
+      {courses.map((course) => (
+        <label key={course}>
+          <input
+            type="checkbox"
+            checked={assigned.includes(course)}
+            onChange={(event) => {
+              const next = event.target.checked ? [...assigned, course] : assigned.filter((item) => item !== course)
+              updateUser(user.id, { assignedCourseIds: next })
+            }}
+          />
+          {course}
+        </label>
+      ))}
+    </div>
+  )
+}
+
+export default App
