@@ -35,7 +35,19 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn() && request.auth.uid == userId && (
+        (
+          request.resource.data.role == 'student'
+          && request.resource.data.courseId is string
+          && request.resource.data.assignedCourseIds == []
+        )
+        || (
+          request.resource.data.role == 'teacher'
+          && request.resource.data.courseId == ''
+          && request.resource.data.assignedCourseIds == []
+          && request.resource.data.teacherInviteCodeHash == get(/databases/$(database)/documents/settings/registration).data.teacherCodeHash
+        )
+      );
       allow update: if signedIn() && (
         isManagement()
         || (
@@ -45,6 +57,11 @@ service cloud.firestore {
         )
       );
       allow delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isManagement();
     }
 
     match /blocks/{blockId} {

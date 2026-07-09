@@ -14,10 +14,10 @@ import {
   auth,
   collection,
   createUserWithEmailAndPassword,
+  deleteUser,
   db,
   doc,
   firebaseEnabled,
-  getDocs,
   onAuthStateChanged,
   onSnapshot,
   sendPasswordResetEmail,
@@ -113,6 +113,13 @@ const seedState = {
   theoryAttendances: [],
   practiceAttendances: [],
   dayOverrides: [],
+  settings: [
+    {
+      id: 'registration',
+      teacherCode: 'lehrer-2026',
+      teacherCodeUpdatedAt: new Date().toISOString(),
+    },
+  ],
 }
 
 function loadStore() {
@@ -135,6 +142,7 @@ const collectionMap = {
   theoryAttendances: 'theoryAttendances',
   practiceAttendances: 'practiceAttendances',
   dayOverrides: 'dayOverrides',
+  settings: 'settings',
 }
 
 function emptyStore() {
@@ -144,17 +152,26 @@ function emptyStore() {
     theoryAttendances: [],
     practiceAttendances: [],
     dayOverrides: [],
+    settings: [],
   }
+}
+
+function normalizeInviteCode(code) {
+  return code.trim().toLowerCase()
+}
+
+async function hashInviteCode(code) {
+  const data = new TextEncoder().encode(normalizeInviteCode(code))
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function getRegistrationSettings(store) {
+  return store.settings.find((item) => item.id === 'registration') || {}
 }
 
 function mergeCollection(store, key, docs) {
   return { ...store, [key]: docs }
-}
-
-async function isFirstFirebaseUser() {
-  if (!firebaseEnabled) return false
-  const snapshot = await getDocs(collection(db, collectionMap.users))
-  return snapshot.empty
 }
 
 function dateDiffDays(startDate, endDate) {
@@ -307,26 +324,36 @@ function App() {
     if (user.role === 'student') setSelectedCourse(user.courseId)
   }
 
-  async function registerStudent(form) {
+  async function registerAccount(form) {
+    const requestedRole = form.accountType === 'teacher' ? 'teacher' : 'student'
+    if (requestedRole === 'teacher' && !normalizeInviteCode(form.teacherCode || '')) {
+      setMessage('Bitte gib den Lehrercode ein.')
+      return
+    }
+
     if (firebaseEnabled) {
+      let credential
       try {
-        const credential = await createUserWithEmailAndPassword(auth, form.email, form.password)
-        const firstUser = await isFirstFirebaseUser()
-        const role = firstUser ? 'admin' : 'student'
+        credential = await createUserWithEmailAndPassword(auth, form.email, form.password)
+        const teacherInviteCodeHash = requestedRole === 'teacher' ? await hashInviteCode(form.teacherCode) : ''
         const user = {
           email: form.email,
           firstName: form.firstName,
           lastName: form.lastName,
-          role,
-          courseId: role === 'student' ? form.courseId : '',
-          assignedCourseIds: role === 'admin' ? courses : [],
+          role: requestedRole,
+          courseId: requestedRole === 'student' ? form.courseId : '',
+          assignedCourseIds: [],
           active: true,
           createdAt: new Date().toISOString(),
         }
+        if (teacherInviteCodeHash) user.teacherInviteCodeHash = teacherInviteCodeHash
         await setDoc(doc(db, collectionMap.users, credential.user.uid), user)
         setSelectedCourse(user.courseId || user.assignedCourseIds[0] || 'GP-12')
       } catch (error) {
-        setMessage(error.code === 'auth/email-already-in-use' ? 'Diese E-Mail ist bereits registriert.' : 'Registrierung konnte nicht abgeschlossen werden.')
+        if (credential?.user) await deleteUser(credential.user).catch(() => signOut(auth))
+        if (error.code === 'auth/email-already-in-use') setMessage('Diese E-Mail ist bereits registriert.')
+        else if (requestedRole === 'teacher') setMessage('Lehrerregistrierung nicht möglich. Prüfe den Lehrercode.')
+        else setMessage('Registrierung konnte nicht abgeschlossen werden.')
       }
       return
     }
@@ -335,20 +362,52 @@ function App() {
       setMessage('Diese E-Mail ist bereits registriert.')
       return
     }
+    const registrationSettings = getRegistrationSettings(store)
+    if (requestedRole === 'teacher' && normalizeInviteCode(form.teacherCode || '') !== normalizeInviteCode(registrationSettings.teacherCode || 'lehrer-2026')) {
+      setMessage('Der Lehrercode stimmt nicht.')
+      return
+    }
     const user = {
-      id: createId('student'),
+      id: createId(requestedRole),
       email: form.email,
       password: form.password,
       firstName: form.firstName,
       lastName: form.lastName,
-      role: 'student',
-      courseId: form.courseId,
+      role: requestedRole,
+      courseId: requestedRole === 'student' ? form.courseId : '',
       assignedCourseIds: [],
       active: true,
     }
     updateStore((draft) => draft.users.push(user))
     setCurrentUserId(user.id)
-    setSelectedCourse(user.courseId)
+    setSelectedCourse(user.courseId || 'GP-12')
+  }
+
+  async function saveTeacherInviteCode(code) {
+    if (!normalizeInviteCode(code)) {
+      setMessage('Bitte gib einen Lehrercode ein.')
+      return
+    }
+    const teacherCodeHash = await hashInviteCode(code)
+    const patch = {
+      teacherCodeHash,
+      teacherCodeUpdatedAt: new Date().toISOString(),
+      teacherCodeUpdatedBy: currentUser.id,
+    }
+    if (firebaseEnabled) {
+      await setDoc(doc(db, collectionMap.settings, 'registration'), patch, { merge: true })
+      setMessage('Lehrercode wurde gespeichert.')
+      return
+    }
+    updateStore((draft) => {
+      let settings = draft.settings.find((item) => item.id === 'registration')
+      if (!settings) {
+        settings = { id: 'registration' }
+        draft.settings.push(settings)
+      }
+      Object.assign(settings, patch, { teacherCode: code })
+    })
+    setMessage('Lehrercode wurde gespeichert.')
   }
 
   async function logout() {
@@ -688,7 +747,7 @@ function App() {
   }
 
   if (!currentUser) {
-    return <AuthScreen authMode={authMode} setAuthMode={setAuthMode} login={login} registerStudent={registerStudent} message={message} />
+    return <AuthScreen authMode={authMode} setAuthMode={setAuthMode} login={login} registerAccount={registerAccount} message={message} />
   }
 
   return (
@@ -750,6 +809,7 @@ function App() {
           saveOverride={saveOverride}
           updateUser={updateUser}
           resetPassword={resetPassword}
+          saveTeacherInviteCode={saveTeacherInviteCode}
         />
       )}
 
@@ -770,19 +830,21 @@ function App() {
   )
 }
 
-function AuthScreen({ authMode, setAuthMode, login, registerStudent, message }) {
+function AuthScreen({ authMode, setAuthMode, login, registerAccount, message }) {
   const [form, setForm] = useState({
     email: '',
     password: '',
     firstName: '',
     lastName: '',
     courseId: 'GP-12',
+    accountType: 'student',
+    teacherCode: '',
   })
 
   function submit(event) {
     event.preventDefault()
     if (authMode === 'login') login(form.email, form.password)
-    else registerStudent(form)
+    else registerAccount(form)
   }
 
   return (
@@ -797,18 +859,34 @@ function AuthScreen({ authMode, setAuthMode, login, registerStudent, message }) 
           <button className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Registrieren</button>
         </div>
         <form onSubmit={submit}>
-          <h1>{authMode === 'login' ? 'Willkommen zurück' : 'Azubi-Account erstellen'}</h1>
+          <h1>{authMode === 'login' ? 'Willkommen zurück' : 'Account erstellen'}</h1>
           <p>
             {authMode === 'login'
               ? firebaseEnabled ? 'Melde dich mit deinem Firebase-Account an.' : 'Demo-Zugänge: admin@azubicheck.local, lehrer@azubicheck.local, azubi@azubicheck.local. Passwort jeweils demo1234.'
-              : firebaseEnabled ? 'Der erste registrierte Account wird Admin. Danach legen Admins Rollen und Kursrechte fest.' : 'Für den MVP registrieren sich Azubis selbst und wählen ihren Kurs.'}
+              : 'Azubis wählen ihren Kurs. Lehrer registrieren sich mit dem Code aus der Verwaltung.'}
           </p>
           {authMode === 'register' && (
-            <div className="form-grid two">
-              <label>Vorname<input value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required /></label>
-              <label>Nachname<input value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required /></label>
-              <label>Kurs<select value={form.courseId} onChange={(event) => setForm({ ...form, courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select></label>
-            </div>
+            <>
+              <div className="account-type-toggle">
+                <label>
+                  <input type="radio" name="accountType" checked={form.accountType === 'student'} onChange={() => setForm({ ...form, accountType: 'student' })} />
+                  Azubi
+                </label>
+                <label>
+                  <input type="radio" name="accountType" checked={form.accountType === 'teacher'} onChange={() => setForm({ ...form, accountType: 'teacher' })} />
+                  Lehrer
+                </label>
+              </div>
+              <div className="form-grid two">
+                <label>Vorname<input value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required /></label>
+                <label>Nachname<input value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required /></label>
+                {form.accountType === 'student' ? (
+                  <label>Kurs<select value={form.courseId} onChange={(event) => setForm({ ...form, courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select></label>
+                ) : (
+                  <label>Lehrercode<input value={form.teacherCode} onChange={(event) => setForm({ ...form, teacherCode: event.target.value })} required /></label>
+                )}
+              </div>
+            </>
           )}
           <label>E-Mail<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>
           <label>Passwort<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required /></label>
@@ -878,6 +956,7 @@ function StaffDashboard(props) {
     saveOverride,
     updateUser,
     resetPassword,
+    saveTeacherInviteCode,
   } = props
   const [tab, setTab] = useState('students')
   const selectedStudent = store.users.find((user) => user.id === selectedStudentId) || selectedStudents[0]
@@ -926,7 +1005,7 @@ function StaffDashboard(props) {
             saveOverride={saveOverride}
           />
         )}
-        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} resetPassword={resetPassword} />}
+        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} resetPassword={resetPassword} saveTeacherInviteCode={saveTeacherInviteCode} />}
       </section>
     </main>
   )
@@ -1164,12 +1243,33 @@ function PracticeBlockDetail({ block, store, savePracticeHours }) {
   )
 }
 
-function AdminPanel({ store, currentUser, updateUser, resetPassword }) {
+function AdminPanel({ store, currentUser, updateUser, resetPassword, saveTeacherInviteCode }) {
+  const [teacherCode, setTeacherCode] = useState('')
   const manageable = store.users.filter((user) => user.id !== currentUser.id).sort((a, b) => getName(a).localeCompare(getName(b)))
+  const registrationSettings = getRegistrationSettings(store)
   return (
     <section className="panel">
       <h1>Verwaltung</h1>
-      <p>Rollen, Kurszuordnung und Lehrerrechte. Passwort-Reset wird später per Firebase-Mail ausgelöst.</p>
+      <p>Rollen, Kurszuordnung, Lehrerrechte und Registrierungscodes.</p>
+      <div className="invite-code-panel">
+        <div>
+          <strong>Lehrerregistrierung</strong>
+          <small>{registrationSettings.teacherCodeUpdatedAt ? `Code zuletzt geändert: ${registrationSettings.teacherCodeUpdatedAt.slice(0, 10)}` : 'Noch kein Lehrercode hinterlegt.'}</small>
+        </div>
+        <label>
+          Neuer Lehrercode
+          <input value={teacherCode} onChange={(event) => setTeacherCode(event.target.value)} placeholder="z. B. BK-Lehrer-2026" />
+        </label>
+        <button
+          className="btn secondary"
+          onClick={() => {
+            saveTeacherInviteCode(teacherCode)
+            setTeacherCode('')
+          }}
+        >
+          Code speichern
+        </button>
+      </div>
       <div className="admin-list">
         {manageable.map((user) => (
           <div className="admin-row" key={user.id}>

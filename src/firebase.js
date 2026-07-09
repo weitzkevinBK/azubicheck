@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app'
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   getAuth,
   onAuthStateChanged,
   sendPasswordResetEmail,
@@ -35,6 +36,7 @@ export const db = app ? getFirestore(app) : null
 export {
   collection,
   createUserWithEmailAndPassword,
+  deleteUser,
   doc,
   getDocs,
   onAuthStateChanged,
