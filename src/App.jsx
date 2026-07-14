@@ -7,6 +7,7 @@ import {
   Clock,
   Fingerprint,
   LogOut,
+  Printer,
   UserCog,
   Users,
 } from 'lucide-react'
@@ -196,6 +197,41 @@ function accruedTargetHoursForBlock(block, referenceDate = todayIso()) {
   return Math.max(1, Math.ceil(dateDiffDays(block.startDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
 }
 
+function addDaysIso(date, days) {
+  const value = new Date(`${date}T00:00:00`)
+  value.setDate(value.getDate() + days)
+  return value.toISOString().slice(0, 10)
+}
+
+function isWeekday(date) {
+  const day = new Date(`${date}T00:00:00`).getDay()
+  return day !== 0 && day !== 6
+}
+
+function nextSchoolDay(date) {
+  let next = addDaysIso(date, 1)
+  while (!isWeekday(next)) next = addDaysIso(next, 1)
+  return next
+}
+
+function formatDate(date) {
+  if (!date) return ''
+  return date.split('-').reverse().join('.')
+}
+
+function getDateRangeLabel(startDate, endDate) {
+  return startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} bis ${formatDate(endDate)}`
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
 function minutesFromTime(time) {
   const [hours, minutes] = time.split(':').map(Number)
   return hours * 60 + minutes
@@ -252,6 +288,146 @@ function summarizeStudent(store, student) {
     .reduce((sum, entry) => sum + Number(entry.actualHours || 0), 0)
   const actual = theory + practice
   return { target, actual, missing: Math.max(0, target - actual) }
+}
+
+function getTheoryDayHours(store, block, studentId, date) {
+  return store.theoryAttendances
+    .filter((entry) => entry.blockId === block.id && entry.studentId === studentId && entry.date === date)
+    .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
+}
+
+function groupAbsenceItems(items) {
+  return items
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.source.localeCompare(b.source))
+    .reduce((groups, item) => {
+      const previous = groups[groups.length - 1]
+      const canMerge = previous
+        && previous.status === 'Fehltag'
+        && item.status === 'Fehltag'
+        && previous.source === item.source
+        && item.startDate === nextSchoolDay(previous.endDate)
+      if (canMerge) {
+        previous.endDate = item.endDate
+        previous.hours += item.hours
+        return groups
+      }
+      groups.push({ ...item })
+      return groups
+    }, [])
+}
+
+function getAbsenceItems(store, student, referenceDate = todayIso()) {
+  const items = []
+  const blocks = store.blocks.filter((block) => block.courseId === student.courseId && block.active && block.startDate <= referenceDate)
+
+  blocks.forEach((block) => {
+    const effectiveEndDate = block.endDate < referenceDate ? block.endDate : referenceDate
+    if (block.type === 'theory') {
+      for (let date = block.startDate; date <= effectiveEndDate; date = addDaysIso(date, 1)) {
+        if (!isWeekday(date)) continue
+        const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
+        const targetHours = Number(override?.fullCreditHours || 8)
+        const actualHours = getTheoryDayHours(store, block, student.id, date)
+        const missingHours = Math.max(0, targetHours - actualHours)
+        if (missingHours > 0.01) {
+          items.push({
+            startDate: date,
+            endDate: date,
+            source: `Theorie Block ${block.blockNumber}`,
+            status: actualHours > 0 ? 'Teilfehlzeit' : 'Fehltag',
+            hours: missingHours,
+          })
+        }
+      }
+      return
+    }
+
+    const targetHours = accruedTargetHoursForBlock(block, referenceDate)
+    const actualHours = store.practiceAttendances
+      .filter((entry) => entry.blockId === block.id && entry.studentId === student.id)
+      .reduce((sum, entry) => sum + Number(entry.actualHours || 0), 0)
+    const missingHours = Math.max(0, targetHours - actualHours)
+    if (missingHours > 0.01) {
+      items.push({
+        startDate: block.startDate,
+        endDate: effectiveEndDate,
+        source: `Praxis Block ${block.blockNumber}`,
+        status: 'Praxisstunden offen',
+        hours: missingHours,
+      })
+    }
+  })
+
+  return groupAbsenceItems(items)
+}
+
+function openAbsenceReport(store, students, title) {
+  const generatedAt = new Date().toLocaleString('de-DE')
+  const reportStudents = students
+    .filter((student) => student.role === 'student' && student.active)
+    .sort((a, b) => getName(a).localeCompare(getName(b)))
+  const studentSections = reportStudents.map((student) => {
+    const summary = summarizeStudent(store, student)
+    const absences = getAbsenceItems(store, student)
+    const rows = absences.length
+      ? absences.map((item) => `
+          <tr>
+            <td>${escapeHtml(getDateRangeLabel(item.startDate, item.endDate))}</td>
+            <td>${escapeHtml(item.source)}</td>
+            <td>${escapeHtml(item.status)}</td>
+            <td class="hours">${item.hours.toFixed(2)} h</td>
+          </tr>
+        `).join('')
+      : '<tr><td colspan="4" class="empty">Keine Fehlzeiten bis heute.</td></tr>'
+    return `
+      <section class="student">
+        <h2>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</h2>
+        <p class="meta">${escapeHtml(student.courseId)} · ${escapeHtml(student.email || '')}</p>
+        <div class="stats">
+          <span>Soll: <strong>${summary.target.toFixed(2)} h</strong></span>
+          <span>Ist: <strong>${summary.actual.toFixed(2)} h</strong></span>
+          <span>Fehlzeit: <strong>${summary.missing.toFixed(2)} h</strong></span>
+        </div>
+        <table>
+          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Status</th><th>Stunden</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </section>
+    `
+  }).join('')
+  const html = `<!doctype html>
+    <html lang="de">
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(title)}</title>
+        <style>
+          body { color: #111827; font-family: Arial, sans-serif; margin: 32px; }
+          h1 { margin: 0 0 6px; font-size: 24px; }
+          h2 { margin: 0; font-size: 18px; }
+          .meta { color: #4b5563; margin: 4px 0 12px; }
+          .student { break-inside: avoid; border-top: 1px solid #d1d5db; padding-top: 18px; margin-top: 22px; }
+          .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 12px; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 13px; }
+          th { background: #f3f4f6; }
+          .hours { text-align: right; white-space: nowrap; }
+          .empty { color: #6b7280; text-align: center; }
+          @media print { body { margin: 18mm; } button { display: none; } }
+        </style>
+      </head>
+      <body>
+        <h1>${escapeHtml(title)}</h1>
+        <p class="meta">Erstellt am ${escapeHtml(generatedAt)} · Fehlzeiten bis ${escapeHtml(formatDate(todayIso()))}</p>
+        <button onclick="window.print()">Drucken / als PDF speichern</button>
+        ${studentSections || '<p class="empty">Keine Azubis für diesen Bericht.</p>'}
+      </body>
+    </html>`
+  const reportWindow = window.open('', '_blank')
+  if (!reportWindow) return
+  reportWindow.document.open()
+  reportWindow.document.write(html)
+  reportWindow.document.close()
+  reportWindow.focus()
 }
 
 function App() {
@@ -1087,6 +1263,7 @@ function StaffDashboard(props) {
             store={store}
             students={displayedStudents}
             selectedStudent={selectedStudent}
+            selectedCourse={selectedCourse}
             setSelectedStudentId={setSelectedStudentId}
             canSearchAllStudents={canSearchAllStudents}
             studentSearch={studentSearch}
@@ -1122,7 +1299,7 @@ function StatsCards({ summary }) {
   )
 }
 
-function StudentOverview({ store, students, selectedStudent, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch }) {
+function StudentOverview({ store, students, selectedStudent, selectedCourse, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch }) {
   const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
   const details = selectedStudent
     ? [
@@ -1133,8 +1310,15 @@ function StudentOverview({ store, students, selectedStudent, setSelectedStudentI
   return (
     <div className="split">
       <section className="panel">
-        <h1>Azubis</h1>
-        <p>{canSearchAllStudents ? 'Suche kursübergreifend nach Vorname, Nachname, E-Mail oder Kurs.' : 'Alphabetisch sortiert nach Nachname.'}</p>
+        <div className="panel-heading">
+          <div>
+            <h1>Azubis</h1>
+            <p>{canSearchAllStudents ? 'Suche kursübergreifend nach Vorname, Nachname, E-Mail oder Kurs.' : 'Alphabetisch sortiert nach Nachname.'}</p>
+          </div>
+          <button className="btn secondary" onClick={() => openAbsenceReport(store, students, studentSearch ? 'Fehlzeiten Suchergebnis' : `Fehlzeiten Kurs ${selectedCourse}`)}>
+            <Printer size={18} /> Liste
+          </button>
+        </div>
         {canSearchAllStudents && (
           <label className="student-search">
             Azubi suchen
@@ -1159,7 +1343,15 @@ function StudentOverview({ store, students, selectedStudent, setSelectedStudentI
       <section className="panel">
         {selectedStudent && summary ? (
           <>
-            <h2>{selectedStudent.firstName} {selectedStudent.lastName}</h2>
+            <div className="panel-heading">
+              <div>
+                <h2>{selectedStudent.firstName} {selectedStudent.lastName}</h2>
+                <p>{selectedStudent.courseId}</p>
+              </div>
+              <button className="btn secondary" onClick={() => openAbsenceReport(store, [selectedStudent], `Fehlzeiten ${selectedStudent.firstName} ${selectedStudent.lastName}`)}>
+                <Printer size={18} /> Azubi
+              </button>
+            </div>
             <StatsCards summary={summary} />
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
             <div className="table compact">
