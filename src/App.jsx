@@ -1354,8 +1354,10 @@ function AdminPanel({ store, currentUser, updateUser, resetPassword, saveInviteC
             </select>
             {user.role === 'student' ? (
               <select disabled={!canEditUser} value={user.courseId} onChange={(event) => updateUser(user.id, { courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select>
-            ) : (
+            ) : user.role === 'teacher' ? (
               <CourseCheckboxes user={user} updateUser={updateUser} disabled={!canEditUser} />
+            ) : (
+              <div className="all-courses-note">Zugriff auf alle Kurse</div>
             )}
             <button className="btn secondary" disabled={isSelf} onClick={() => resetPassword(user.email)}>Passwort-Reset</button>
           </div>
