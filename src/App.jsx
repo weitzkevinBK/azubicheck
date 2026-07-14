@@ -118,6 +118,8 @@ const seedState = {
       id: 'registration',
       teacherCode: 'lehrer-2026',
       teacherCodeUpdatedAt: new Date().toISOString(),
+      managementCode: 'verwaltung-2026',
+      managementCodeUpdatedAt: new Date().toISOString(),
     },
   ],
 }
@@ -283,7 +285,8 @@ function App() {
   const currentUser = store.users.find((user) => user.id === currentUserId)
   const visibleCourses = useMemo(() => {
     if (!currentUser) return courses
-    if (currentUser.role === 'teacher' || currentUser.role === 'management') {
+    if (currentUser.role === 'management' || currentUser.role === 'admin') return courses
+    if (currentUser.role === 'teacher') {
       return currentUser.assignedCourseIds?.length ? currentUser.assignedCourseIds : []
     }
     return courses
@@ -325,9 +328,10 @@ function App() {
   }
 
   async function registerAccount(form) {
-    const requestedRole = form.accountType === 'teacher' ? 'teacher' : 'student'
-    if (requestedRole === 'teacher' && !normalizeInviteCode(form.teacherCode || '')) {
-      setMessage('Bitte gib den Lehrercode ein.')
+    const requestedRole = ['teacher', 'management'].includes(form.accountType) ? form.accountType : 'student'
+    const inviteCode = requestedRole === 'teacher' ? form.teacherCode : form.managementCode
+    if (requestedRole !== 'student' && !normalizeInviteCode(inviteCode || '')) {
+      setMessage(requestedRole === 'teacher' ? 'Bitte gib den Lehrercode ein.' : 'Bitte gib den Verwaltungscode ein.')
       return
     }
 
@@ -335,7 +339,7 @@ function App() {
       let credential
       try {
         credential = await createUserWithEmailAndPassword(auth, form.email, form.password)
-        const teacherInviteCodeHash = requestedRole === 'teacher' ? await hashInviteCode(form.teacherCode) : ''
+        const inviteCodeHash = requestedRole !== 'student' ? await hashInviteCode(inviteCode) : ''
         const user = {
           email: form.email,
           firstName: form.firstName,
@@ -346,13 +350,15 @@ function App() {
           active: true,
           createdAt: new Date().toISOString(),
         }
-        if (teacherInviteCodeHash) user.teacherInviteCodeHash = teacherInviteCodeHash
+        if (requestedRole === 'teacher') user.teacherInviteCodeHash = inviteCodeHash
+        if (requestedRole === 'management') user.managementInviteCodeHash = inviteCodeHash
         await setDoc(doc(db, collectionMap.users, credential.user.uid), user)
         setSelectedCourse(user.courseId || user.assignedCourseIds[0] || 'GP-12')
       } catch (error) {
         if (credential?.user) await deleteUser(credential.user).catch(() => signOut(auth))
         if (error.code === 'auth/email-already-in-use') setMessage('Diese E-Mail ist bereits registriert.')
         else if (requestedRole === 'teacher') setMessage('Lehrerregistrierung nicht möglich. Prüfe den Lehrercode.')
+        else if (requestedRole === 'management') setMessage('Verwaltungsregistrierung nicht möglich. Prüfe den Verwaltungscode.')
         else setMessage('Registrierung konnte nicht abgeschlossen werden.')
       }
       return
@@ -365,6 +371,10 @@ function App() {
     const registrationSettings = getRegistrationSettings(store)
     if (requestedRole === 'teacher' && normalizeInviteCode(form.teacherCode || '') !== normalizeInviteCode(registrationSettings.teacherCode || 'lehrer-2026')) {
       setMessage('Der Lehrercode stimmt nicht.')
+      return
+    }
+    if (requestedRole === 'management' && normalizeInviteCode(form.managementCode || '') !== normalizeInviteCode(registrationSettings.managementCode || 'verwaltung-2026')) {
+      setMessage('Der Verwaltungscode stimmt nicht.')
       return
     }
     const user = {
@@ -383,20 +393,22 @@ function App() {
     setSelectedCourse(user.courseId || 'GP-12')
   }
 
-  async function saveTeacherInviteCode(code) {
+  async function saveInviteCode(type, code) {
     if (!normalizeInviteCode(code)) {
-      setMessage('Bitte gib einen Lehrercode ein.')
+      setMessage(type === 'teacher' ? 'Bitte gib einen Lehrercode ein.' : 'Bitte gib einen Verwaltungscode ein.')
       return
     }
-    const teacherCodeHash = await hashInviteCode(code)
+    const codeHash = await hashInviteCode(code)
+    const label = type === 'teacher' ? 'Lehrercode' : 'Verwaltungscode'
+    const keyPrefix = type === 'teacher' ? 'teacher' : 'management'
     const patch = {
-      teacherCodeHash,
-      teacherCodeUpdatedAt: new Date().toISOString(),
-      teacherCodeUpdatedBy: currentUser.id,
+      [`${keyPrefix}CodeHash`]: codeHash,
+      [`${keyPrefix}CodeUpdatedAt`]: new Date().toISOString(),
+      [`${keyPrefix}CodeUpdatedBy`]: currentUser.id,
     }
     if (firebaseEnabled) {
       await setDoc(doc(db, collectionMap.settings, 'registration'), patch, { merge: true })
-      setMessage('Lehrercode wurde gespeichert.')
+      setMessage(`${label} wurde gespeichert.`)
       return
     }
     updateStore((draft) => {
@@ -405,9 +417,9 @@ function App() {
         settings = { id: 'registration' }
         draft.settings.push(settings)
       }
-      Object.assign(settings, patch, { teacherCode: code })
+      Object.assign(settings, patch, { [`${keyPrefix}Code`]: code })
     })
-    setMessage('Lehrercode wurde gespeichert.')
+    setMessage(`${label} wurde gespeichert.`)
   }
 
   async function logout() {
@@ -809,7 +821,7 @@ function App() {
           saveOverride={saveOverride}
           updateUser={updateUser}
           resetPassword={resetPassword}
-          saveTeacherInviteCode={saveTeacherInviteCode}
+          saveInviteCode={saveInviteCode}
         />
       )}
 
@@ -839,6 +851,7 @@ function AuthScreen({ authMode, setAuthMode, login, registerAccount, message }) 
     courseId: 'GP-12',
     accountType: 'student',
     teacherCode: '',
+    managementCode: '',
   })
 
   function submit(event) {
@@ -863,7 +876,7 @@ function AuthScreen({ authMode, setAuthMode, login, registerAccount, message }) 
           <p>
             {authMode === 'login'
               ? firebaseEnabled ? 'Melde dich mit deinem Firebase-Account an.' : 'Demo-Zugänge: admin@azubicheck.local, lehrer@azubicheck.local, azubi@azubicheck.local. Passwort jeweils demo1234.'
-              : 'Azubis wählen ihren Kurs. Lehrer registrieren sich mit dem Code aus der Verwaltung.'}
+              : 'Azubis wählen ihren Kurs. Lehrer und Verwaltung registrieren sich mit ihrem jeweiligen Code.'}
           </p>
           {authMode === 'register' && (
             <>
@@ -876,14 +889,20 @@ function AuthScreen({ authMode, setAuthMode, login, registerAccount, message }) 
                   <input type="radio" name="accountType" checked={form.accountType === 'teacher'} onChange={() => setForm({ ...form, accountType: 'teacher' })} />
                   Lehrer
                 </label>
+                <label>
+                  <input type="radio" name="accountType" checked={form.accountType === 'management'} onChange={() => setForm({ ...form, accountType: 'management' })} />
+                  Verwaltung
+                </label>
               </div>
               <div className="form-grid two">
                 <label>Vorname<input value={form.firstName} onChange={(event) => setForm({ ...form, firstName: event.target.value })} required /></label>
                 <label>Nachname<input value={form.lastName} onChange={(event) => setForm({ ...form, lastName: event.target.value })} required /></label>
                 {form.accountType === 'student' ? (
                   <label>Kurs<select value={form.courseId} onChange={(event) => setForm({ ...form, courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select></label>
-                ) : (
+                ) : form.accountType === 'teacher' ? (
                   <label>Lehrercode<input value={form.teacherCode} onChange={(event) => setForm({ ...form, teacherCode: event.target.value })} required /></label>
+                ) : (
+                  <label>Verwaltungscode<input value={form.managementCode} onChange={(event) => setForm({ ...form, managementCode: event.target.value })} required /></label>
                 )}
               </div>
             </>
@@ -956,10 +975,23 @@ function StaffDashboard(props) {
     saveOverride,
     updateUser,
     resetPassword,
-    saveTeacherInviteCode,
+    saveInviteCode,
   } = props
   const [tab, setTab] = useState('students')
-  const selectedStudent = store.users.find((user) => user.id === selectedStudentId) || selectedStudents[0]
+  const [studentSearch, setStudentSearch] = useState('')
+  const canSearchAllStudents = currentUser.role === 'admin' || currentUser.role === 'management'
+  const normalizedSearch = studentSearch.trim().toLowerCase()
+  const displayedStudents = useMemo(() => {
+    if (!canSearchAllStudents || !normalizedSearch) return selectedStudents
+    return store.users
+      .filter((user) => {
+        if (user.role !== 'student' || !user.active) return false
+        const haystack = `${user.firstName} ${user.lastName} ${user.email || ''} ${user.courseId}`.toLowerCase()
+        return haystack.includes(normalizedSearch)
+      })
+      .sort((a, b) => getName(a).localeCompare(getName(b)))
+  }, [canSearchAllStudents, normalizedSearch, selectedStudents, store.users])
+  const selectedStudent = store.users.find((user) => user.id === selectedStudentId) || displayedStudents[0]
   const courseBlocks = store.blocks.filter((block) => block.courseId === selectedCourse && block.active)
   const activeBlock = store.blocks.find((block) => block.id === activeBlockId) || courseBlocks[0]
 
@@ -987,9 +1019,12 @@ function StaffDashboard(props) {
         {tab === 'students' && (
           <StudentOverview
             store={store}
-            students={selectedStudents}
+            students={displayedStudents}
             selectedStudent={selectedStudent}
             setSelectedStudentId={setSelectedStudentId}
+            canSearchAllStudents={canSearchAllStudents}
+            studentSearch={studentSearch}
+            setStudentSearch={setStudentSearch}
           />
         )}
         {tab === 'blocks' && (
@@ -1005,7 +1040,7 @@ function StaffDashboard(props) {
             saveOverride={saveOverride}
           />
         )}
-        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} resetPassword={resetPassword} saveTeacherInviteCode={saveTeacherInviteCode} />}
+        {tab === 'admin' && <AdminPanel store={store} currentUser={currentUser} updateUser={updateUser} resetPassword={resetPassword} saveInviteCode={saveInviteCode} />}
       </section>
     </main>
   )
@@ -1021,7 +1056,7 @@ function StatsCards({ summary }) {
   )
 }
 
-function StudentOverview({ store, students, selectedStudent, setSelectedStudentId }) {
+function StudentOverview({ store, students, selectedStudent, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch }) {
   const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
   const details = selectedStudent
     ? [
@@ -1033,7 +1068,13 @@ function StudentOverview({ store, students, selectedStudent, setSelectedStudentI
     <div className="split">
       <section className="panel">
         <h1>Azubis</h1>
-        <p>Alphabetisch sortiert nach Nachname.</p>
+        <p>{canSearchAllStudents ? 'Suche kursübergreifend nach Vorname, Nachname, E-Mail oder Kurs.' : 'Alphabetisch sortiert nach Nachname.'}</p>
+        {canSearchAllStudents && (
+          <label className="student-search">
+            Azubi suchen
+            <input value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} placeholder="Vorname, Nachname, E-Mail oder Kurs" />
+          </label>
+        )}
         <div className="student-list">
           {students.map((student) => {
             const row = summarizeStudent(store, student)
@@ -1046,7 +1087,7 @@ function StudentOverview({ store, students, selectedStudent, setSelectedStudentI
               </button>
             )
           })}
-          {!students.length && <div className="empty">Keine Azubis in diesem Kurs.</div>}
+          {!students.length && <div className="empty">{studentSearch ? 'Keine passenden Azubis gefunden.' : 'Keine Azubis in diesem Kurs.'}</div>}
         </div>
       </section>
       <section className="panel">
@@ -1243,32 +1284,54 @@ function PracticeBlockDetail({ block, store, savePracticeHours }) {
   )
 }
 
-function AdminPanel({ store, currentUser, updateUser, resetPassword, saveTeacherInviteCode }) {
+function AdminPanel({ store, currentUser, updateUser, resetPassword, saveInviteCode }) {
   const [teacherCode, setTeacherCode] = useState('')
+  const [managementCode, setManagementCode] = useState('')
   const manageable = store.users.filter((user) => user.id !== currentUser.id).sort((a, b) => getName(a).localeCompare(getName(b)))
   const registrationSettings = getRegistrationSettings(store)
   return (
     <section className="panel">
       <h1>Verwaltung</h1>
       <p>Rollen, Kurszuordnung, Lehrerrechte und Registrierungscodes.</p>
-      <div className="invite-code-panel">
+      <div className="invite-code-grid">
+        <div className="invite-code-panel">
+          <div>
+            <strong>Lehrerregistrierung</strong>
+            <small>{registrationSettings.teacherCodeUpdatedAt ? `Code zuletzt geändert: ${registrationSettings.teacherCodeUpdatedAt.slice(0, 10)}` : 'Noch kein Lehrercode hinterlegt.'}</small>
+          </div>
+          <label>
+            Neuer Lehrercode
+            <input value={teacherCode} onChange={(event) => setTeacherCode(event.target.value)} placeholder="z. B. BK-Lehrer-2026" />
+          </label>
+          <button
+            className="btn secondary"
+            onClick={() => {
+              saveInviteCode('teacher', teacherCode)
+              setTeacherCode('')
+            }}
+          >
+            Code speichern
+          </button>
+        </div>
+        <div className="invite-code-panel">
         <div>
-          <strong>Lehrerregistrierung</strong>
-          <small>{registrationSettings.teacherCodeUpdatedAt ? `Code zuletzt geändert: ${registrationSettings.teacherCodeUpdatedAt.slice(0, 10)}` : 'Noch kein Lehrercode hinterlegt.'}</small>
+          <strong>Verwaltungsregistrierung</strong>
+          <small>{registrationSettings.managementCodeUpdatedAt ? `Code zuletzt geändert: ${registrationSettings.managementCodeUpdatedAt.slice(0, 10)}` : 'Noch kein Verwaltungscode hinterlegt.'}</small>
         </div>
         <label>
-          Neuer Lehrercode
-          <input value={teacherCode} onChange={(event) => setTeacherCode(event.target.value)} placeholder="z. B. BK-Lehrer-2026" />
+          Neuer Verwaltungscode
+          <input value={managementCode} onChange={(event) => setManagementCode(event.target.value)} placeholder="z. B. BK-Verwaltung-2026" />
         </label>
         <button
           className="btn secondary"
           onClick={() => {
-            saveTeacherInviteCode(teacherCode)
-            setTeacherCode('')
+            saveInviteCode('management', managementCode)
+            setManagementCode('')
           }}
         >
           Code speichern
         </button>
+        </div>
       </div>
       <div className="admin-list">
         {manageable.map((user) => (

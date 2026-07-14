@@ -47,6 +47,12 @@ service cloud.firestore {
           && request.resource.data.assignedCourseIds == []
           && request.resource.data.teacherInviteCodeHash == get(/databases/$(database)/documents/settings/registration).data.teacherCodeHash
         )
+        || (
+          request.resource.data.role == 'management'
+          && request.resource.data.courseId == ''
+          && request.resource.data.assignedCourseIds == []
+          && request.resource.data.managementInviteCodeHash == get(/databases/$(database)/documents/settings/registration).data.managementCodeHash
+        )
       );
       allow update: if signedIn() && (
         isManagement()
