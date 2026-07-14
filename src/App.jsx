@@ -197,6 +197,17 @@ function accruedTargetHoursForBlock(block, referenceDate = todayIso()) {
   return Math.max(1, Math.ceil(dateDiffDays(block.startDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
 }
 
+function blockOverlapsRange(block, startDate, endDate) {
+  return block.startDate <= endDate && block.endDate >= startDate
+}
+
+function targetHoursForBlockRange(block, startDate, endDate) {
+  if (!blockOverlapsRange(block, startDate, endDate)) return 0
+  const effectiveStartDate = block.startDate > startDate ? block.startDate : startDate
+  const effectiveEndDate = block.endDate < endDate ? block.endDate : endDate
+  return Math.max(1, Math.ceil(dateDiffDays(effectiveStartDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
+}
+
 function addDaysIso(date, days) {
   const value = new Date(`${date}T00:00:00`)
   value.setDate(value.getDate() + days)
@@ -277,14 +288,25 @@ function getFallbackProfileName(user) {
   }
 }
 
-function summarizeStudent(store, student) {
+function summarizeStudent(store, student, period) {
   const studentBlocks = store.blocks.filter((block) => block.courseId === student.courseId && block.active)
-  const target = studentBlocks.reduce((sum, block) => sum + accruedTargetHoursForBlock(block), 0)
+  const scopedBlocks = period
+    ? studentBlocks.filter((block) => blockOverlapsRange(block, period.startDate, period.endDate))
+    : studentBlocks
+  const target = scopedBlocks.reduce((sum, block) => {
+    if (period) return sum + targetHoursForBlockRange(block, period.startDate, period.endDate)
+    return sum + accruedTargetHoursForBlock(block)
+  }, 0)
   const theory = store.theoryAttendances
-    .filter((entry) => entry.studentId === student.id)
+    .filter((entry) => entry.studentId === student.id && (!period || (entry.date >= period.startDate && entry.date <= period.endDate)))
     .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
   const practice = store.practiceAttendances
-    .filter((entry) => entry.studentId === student.id)
+    .filter((entry) => {
+      if (entry.studentId !== student.id) return false
+      if (!period) return true
+      const block = studentBlocks.find((item) => item.id === entry.blockId)
+      return block ? blockOverlapsRange(block, period.startDate, period.endDate) : false
+    })
     .reduce((sum, entry) => sum + Number(entry.actualHours || 0), 0)
   const actual = theory + practice
   return { target, actual, missing: Math.max(0, target - actual) }
@@ -316,14 +338,21 @@ function groupAbsenceItems(items) {
     }, [])
 }
 
-function getAbsenceItems(store, student, referenceDate = todayIso()) {
+function getAbsenceItems(store, student, period = { startDate: '0000-01-01', endDate: todayIso() }) {
   const items = []
-  const blocks = store.blocks.filter((block) => block.courseId === student.courseId && block.active && block.startDate <= referenceDate)
+  const referenceDate = period.endDate < todayIso() ? period.endDate : todayIso()
+  const blocks = store.blocks.filter((block) =>
+    block.courseId === student.courseId
+    && block.active
+    && block.startDate <= referenceDate
+    && blockOverlapsRange(block, period.startDate, referenceDate),
+  )
 
   blocks.forEach((block) => {
+    const effectiveStartDate = block.startDate > period.startDate ? block.startDate : period.startDate
     const effectiveEndDate = block.endDate < referenceDate ? block.endDate : referenceDate
     if (block.type === 'theory') {
-      for (let date = block.startDate; date <= effectiveEndDate; date = addDaysIso(date, 1)) {
+      for (let date = effectiveStartDate; date <= effectiveEndDate; date = addDaysIso(date, 1)) {
         if (!isWeekday(date)) continue
         const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
         const targetHours = Number(override?.fullCreditHours || 8)
@@ -342,7 +371,7 @@ function getAbsenceItems(store, student, referenceDate = todayIso()) {
       return
     }
 
-    const targetHours = accruedTargetHoursForBlock(block, referenceDate)
+    const targetHours = targetHoursForBlockRange(block, effectiveStartDate, effectiveEndDate)
     const actualHours = store.practiceAttendances
       .filter((entry) => entry.blockId === block.id && entry.studentId === student.id)
       .reduce((sum, entry) => sum + Number(entry.actualHours || 0), 0)
@@ -361,14 +390,16 @@ function getAbsenceItems(store, student, referenceDate = todayIso()) {
   return groupAbsenceItems(items)
 }
 
-function openAbsenceReport(store, students, title) {
+function openAbsenceReport(store, students, title, period) {
   const generatedAt = new Date().toLocaleString('de-DE')
+  const reportPeriod = period || { startDate: '0000-01-01', endDate: todayIso() }
+  const evaluatedUntil = reportPeriod.endDate < todayIso() ? reportPeriod.endDate : todayIso()
   const reportStudents = students
     .filter((student) => student.role === 'student' && student.active)
     .sort((a, b) => getName(a).localeCompare(getName(b)))
   const studentSections = reportStudents.map((student) => {
-    const summary = summarizeStudent(store, student)
-    const absences = getAbsenceItems(store, student)
+    const summary = summarizeStudent(store, student, { startDate: reportPeriod.startDate, endDate: evaluatedUntil })
+    const absences = getAbsenceItems(store, student, { startDate: reportPeriod.startDate, endDate: reportPeriod.endDate })
     const rows = absences.length
       ? absences.map((item) => `
           <tr>
@@ -417,7 +448,7 @@ function openAbsenceReport(store, students, title) {
       </head>
       <body>
         <h1>${escapeHtml(title)}</h1>
-        <p class="meta">Erstellt am ${escapeHtml(generatedAt)} · Fehlzeiten bis ${escapeHtml(formatDate(todayIso()))}</p>
+        <p class="meta">Erstellt am ${escapeHtml(generatedAt)} · Zeitraum ${escapeHtml(formatDate(reportPeriod.startDate))} bis ${escapeHtml(formatDate(reportPeriod.endDate))} · ausgewertet bis ${escapeHtml(formatDate(evaluatedUntil))}</p>
         <button onclick="window.print()">Drucken / als PDF speichern</button>
         ${studentSections || '<p class="empty">Keine Azubis für diesen Bericht.</p>'}
       </body>
@@ -1300,6 +1331,8 @@ function StatsCards({ summary }) {
 }
 
 function StudentOverview({ store, students, selectedStudent, selectedCourse, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch }) {
+  const [reportRequest, setReportRequest] = useState(null)
+  const [reportPeriod, setReportPeriod] = useState({ startDate: `${new Date().getFullYear()}-01-01`, endDate: todayIso() })
   const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
   const details = selectedStudent
     ? [
@@ -1315,7 +1348,7 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             <h1>Azubis</h1>
             <p>{canSearchAllStudents ? 'Suche kursübergreifend nach Vorname, Nachname, E-Mail oder Kurs.' : 'Alphabetisch sortiert nach Nachname.'}</p>
           </div>
-          <button className="btn secondary" onClick={() => openAbsenceReport(store, students, studentSearch ? 'Fehlzeiten Suchergebnis' : `Fehlzeiten Kurs ${selectedCourse}`)}>
+          <button className="btn secondary" onClick={() => setReportRequest({ students, title: studentSearch ? 'Fehlzeiten Suchergebnis' : `Fehlzeiten Kurs ${selectedCourse}` })}>
             <Printer size={18} /> Liste
           </button>
         </div>
@@ -1348,7 +1381,7 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
                 <h2>{selectedStudent.firstName} {selectedStudent.lastName}</h2>
                 <p>{selectedStudent.courseId}</p>
               </div>
-              <button className="btn secondary" onClick={() => openAbsenceReport(store, [selectedStudent], `Fehlzeiten ${selectedStudent.firstName} ${selectedStudent.lastName}`)}>
+              <button className="btn secondary" onClick={() => setReportRequest({ students: [selectedStudent], title: `Fehlzeiten ${selectedStudent.firstName} ${selectedStudent.lastName}` })}>
                 <Printer size={18} /> Azubi
               </button>
             </div>
@@ -1371,6 +1404,35 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
           <div className="empty">Wähle einen Azubi aus.</div>
         )}
       </section>
+      {reportRequest && (
+        <div className="modal-backdrop">
+          <form
+            className="modal"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (reportPeriod.startDate > reportPeriod.endDate) return
+              openAbsenceReport(store, reportRequest.students, reportRequest.title, reportPeriod)
+              setReportRequest(null)
+            }}
+          >
+            <h2>Zeitraum auswählen</h2>
+            <p>Der Bericht enthält nur Anwesenheiten und Fehlzeiten innerhalb dieses Datumsbereichs.</p>
+            <div className="form-grid two">
+              <label>Von
+                <input type="date" value={reportPeriod.startDate} onChange={(event) => setReportPeriod({ ...reportPeriod, startDate: event.target.value })} required />
+              </label>
+              <label>Bis
+                <input type="date" value={reportPeriod.endDate} onChange={(event) => setReportPeriod({ ...reportPeriod, endDate: event.target.value })} required />
+              </label>
+            </div>
+            {reportPeriod.startDate > reportPeriod.endDate && <div className="form-message">Das Startdatum muss vor dem Enddatum liegen.</div>}
+            <div className="modal-actions">
+              <button className="btn primary" disabled={reportPeriod.startDate > reportPeriod.endDate}><Printer size={18} /> Bericht erstellen</button>
+              <button type="button" className="btn secondary" onClick={() => setReportRequest(null)}>Abbrechen</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
