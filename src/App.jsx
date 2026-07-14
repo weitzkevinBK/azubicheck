@@ -190,6 +190,12 @@ function targetHoursForBlock(block) {
   return blockWeeks(block) * (block.type === 'practice' ? 40 : 38)
 }
 
+function accruedTargetHoursForBlock(block, referenceDate = todayIso()) {
+  if (block.startDate > referenceDate) return 0
+  const effectiveEndDate = block.endDate < referenceDate ? block.endDate : referenceDate
+  return Math.max(1, Math.ceil(dateDiffDays(block.startDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
+}
+
 function minutesFromTime(time) {
   const [hours, minutes] = time.split(':').map(Number)
   return hours * 60 + minutes
@@ -237,7 +243,7 @@ function getFallbackProfileName(user) {
 
 function summarizeStudent(store, student) {
   const studentBlocks = store.blocks.filter((block) => block.courseId === student.courseId && block.active)
-  const target = studentBlocks.reduce((sum, block) => sum + targetHoursForBlock(block), 0)
+  const target = studentBlocks.reduce((sum, block) => sum + accruedTargetHoursForBlock(block), 0)
   const theory = store.theoryAttendances
     .filter((entry) => entry.studentId === student.id)
     .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
