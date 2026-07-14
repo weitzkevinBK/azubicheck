@@ -761,7 +761,7 @@ function App() {
             <strong>
               Azubi<span>Check.</span>
             </strong>
-            <small>Schulalltag MVP</small>
+            <small>Anwesenheiten leicht gemacht</small>
           </div>
         </div>
         <div className="topbar-actions">
