@@ -220,6 +220,21 @@ function getName(user) {
   return `${user.lastName}, ${user.firstName}`
 }
 
+function capitalizeNamePart(value) {
+  if (!value) return ''
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
+}
+
+function getFallbackProfileName(user) {
+  const displayName = user.displayName?.trim()
+  const rawName = displayName || user.email?.split('@')[0] || 'unbekannt account'
+  const parts = rawName.replace(/[._-]+/g, ' ').trim().split(/\s+/).filter(Boolean)
+  return {
+    firstName: capitalizeNamePart(parts[0] || 'Unbekannt'),
+    lastName: parts.slice(1).map(capitalizeNamePart).join(' ') || 'Account',
+  }
+}
+
 function summarizeStudent(store, student) {
   const studentBlocks = store.blocks.filter((block) => block.courseId === student.courseId && block.active)
   const target = studentBlocks.reduce((sum, block) => sum + targetHoursForBlock(block), 0)
@@ -238,6 +253,7 @@ function App() {
   const [currentUserId, setCurrentUserId] = useState(firebaseEnabled ? '' : localStorage.getItem('azubicheck:user') || '')
   const [authUser, setAuthUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(firebaseEnabled)
+  const [usersLoaded, setUsersLoaded] = useState(!firebaseEnabled)
   const [authMode, setAuthMode] = useState('login')
   const [selectedCourse, setSelectedCourse] = useState('GP-12')
   const [selectedStudentId, setSelectedStudentId] = useState('')
@@ -266,15 +282,21 @@ function App() {
 
   useEffect(() => {
     if (!firebaseEnabled || !authUser) {
-      if (firebaseEnabled) setStore(emptyStore())
+      if (firebaseEnabled) {
+        setStore(emptyStore())
+        setUsersLoaded(false)
+      }
       return undefined
     }
 
+    setUsersLoaded(false)
     const unsubscribers = Object.entries(collectionMap).map(([key, name]) =>
       onSnapshot(collection(db, name), (snapshot) => {
         const docs = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
         setStore((previous) => mergeCollection(previous, key, docs))
+        if (key === 'users') setUsersLoaded(true)
       }, () => {
+        if (key === 'users') setUsersLoaded(true)
         setMessage('Firebase-Daten konnten nicht geladen werden. Prüfe Firestore und die Sicherheitsregeln.')
       }),
     )
@@ -283,6 +305,40 @@ function App() {
   }, [authUser])
 
   const currentUser = store.users.find((user) => user.id === currentUserId)
+
+  useEffect(() => {
+    if (!firebaseEnabled || !authUser || !usersLoaded || currentUser) return undefined
+
+    let cancelled = false
+    async function recoverMissingProfile() {
+      const profileName = getFallbackProfileName(authUser)
+      try {
+        await setDoc(doc(db, collectionMap.users, authUser.uid), {
+          email: authUser.email || '',
+          firstName: profileName.firstName,
+          lastName: profileName.lastName,
+          role: 'student',
+          courseId: 'GP-12',
+          assignedCourseIds: [],
+          active: true,
+          createdAt: new Date().toISOString(),
+          profileRecovered: true,
+        })
+        if (!cancelled) {
+          setSelectedCourse('GP-12')
+          setMessage('Dein Azubi-Profil wurde angelegt. Die Verwaltung kann Kurs und Rolle jetzt prüfen.')
+        }
+      } catch {
+        if (!cancelled) setMessage('Profil konnte nicht automatisch angelegt werden. Bitte an die Verwaltung wenden.')
+      }
+    }
+
+    recoverMissingProfile()
+    return () => {
+      cancelled = true
+    }
+  }, [authUser, currentUser, usersLoaded])
+
   const visibleCourses = useMemo(() => {
     if (!currentUser) return courses
     if (currentUser.role === 'management' || currentUser.role === 'admin') return courses
@@ -750,8 +806,12 @@ function App() {
     return (
       <main className="auth-page">
         <section className="auth-card">
-          <h1>Profil wird geladen</h1>
-          <p>Dein Account ist angemeldet, das AzubiCheck-Profil wird aus Firebase geladen.</p>
+          <h1>{usersLoaded ? 'Profil wird angelegt' : 'Profil wird geladen'}</h1>
+          <p>
+            {usersLoaded
+              ? 'Dein Login existiert bereits. AzubiCheck legt gerade das fehlende Profil für die Verwaltung an.'
+              : 'Dein Account ist angemeldet, das AzubiCheck-Profil wird aus Firebase geladen.'}
+          </p>
           <button className="btn secondary" onClick={logout}>Abmelden</button>
         </section>
       </main>
