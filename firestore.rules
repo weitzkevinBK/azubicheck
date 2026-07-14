@@ -24,6 +24,10 @@ service cloud.firestore {
       return role() == 'management' || isAdmin();
     }
 
+    function isPureManagement() {
+      return role() == 'management';
+    }
+
     function isTeacher() {
       return role() == 'teacher' || isManagement();
     }
@@ -55,7 +59,12 @@ service cloud.firestore {
         )
       );
       allow update: if signedIn() && (
-        isManagement()
+        isAdmin()
+        || (
+          isPureManagement()
+          && resource.data.role != 'admin'
+          && request.resource.data.role in ['student', 'teacher', 'management']
+        )
         || (
           request.auth.uid == userId
           && request.resource.data.role == resource.data.role

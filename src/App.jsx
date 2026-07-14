@@ -1287,8 +1287,9 @@ function PracticeBlockDetail({ block, store, savePracticeHours }) {
 function AdminPanel({ store, currentUser, updateUser, resetPassword, saveInviteCode }) {
   const [teacherCode, setTeacherCode] = useState('')
   const [managementCode, setManagementCode] = useState('')
-  const manageable = store.users.filter((user) => user.id !== currentUser.id).sort((a, b) => getName(a).localeCompare(getName(b)))
+  const manageable = store.users.sort((a, b) => getName(a).localeCompare(getName(b)))
   const registrationSettings = getRegistrationSettings(store)
+  const canAssignAdmin = currentUser.role === 'admin'
   return (
     <section className="panel">
       <h1>Verwaltung</h1>
@@ -1334,32 +1335,38 @@ function AdminPanel({ store, currentUser, updateUser, resetPassword, saveInviteC
         </div>
       </div>
       <div className="admin-list">
-        {manageable.map((user) => (
-          <div className="admin-row" key={user.id}>
+        {manageable.map((user) => {
+          const isSelf = user.id === currentUser.id
+          const isProtectedAdmin = currentUser.role !== 'admin' && user.role === 'admin'
+          const canEditUser = !isSelf && !isProtectedAdmin
+          return (
+          <div className={isSelf ? 'admin-row current' : 'admin-row'} key={user.id}>
             <div>
               <strong>{user.firstName} {user.lastName}</strong>
               <small>{user.email}</small>
+              <small>{roleLabels[user.role]}{isSelf ? ' · eigener Account' : ''}</small>
             </div>
-            <select value={user.role} onChange={(event) => updateUser(user.id, { role: event.target.value })}>
+            <select disabled={!canEditUser} value={user.role} onChange={(event) => updateUser(user.id, { role: event.target.value })}>
               <option value="student">Azubi</option>
               <option value="teacher">Lehrer</option>
               <option value="management">Verwaltung</option>
-              <option value="admin">Admin</option>
+              {canAssignAdmin && <option value="admin">Admin</option>}
             </select>
             {user.role === 'student' ? (
-              <select value={user.courseId} onChange={(event) => updateUser(user.id, { courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select>
+              <select disabled={!canEditUser} value={user.courseId} onChange={(event) => updateUser(user.id, { courseId: event.target.value })}>{courses.map((course) => <option key={course}>{course}</option>)}</select>
             ) : (
-              <CourseCheckboxes user={user} updateUser={updateUser} />
+              <CourseCheckboxes user={user} updateUser={updateUser} disabled={!canEditUser} />
             )}
-            <button className="btn secondary" onClick={() => resetPassword(user.email)}>Passwort-Reset</button>
+            <button className="btn secondary" disabled={isSelf} onClick={() => resetPassword(user.email)}>Passwort-Reset</button>
           </div>
-        ))}
+          )
+        })}
       </div>
     </section>
   )
 }
 
-function CourseCheckboxes({ user, updateUser }) {
+function CourseCheckboxes({ user, updateUser, disabled }) {
   const assigned = user.assignedCourseIds || []
   return (
     <div className="course-checks">
@@ -1367,6 +1374,7 @@ function CourseCheckboxes({ user, updateUser }) {
         <label key={course}>
           <input
             type="checkbox"
+            disabled={disabled}
             checked={assigned.includes(course)}
             onChange={(event) => {
               const next = event.target.checked ? [...assigned, course] : assigned.filter((item) => item !== course)

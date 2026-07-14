@@ -635,6 +635,11 @@ form {
   padding: 0.75rem;
 }
 
+.admin-row.current {
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.12);
+}
+
 .student-search {
   margin-bottom: 0.75rem;
 }
