@@ -342,6 +342,7 @@ form {
 .panel {
   border-radius: 10px;
   padding: 1.1rem;
+  overflow: hidden;
 }
 
 .panel-heading {
@@ -518,6 +519,16 @@ form {
   gap: 0.4rem;
 }
 
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+
+.attendance-detail-table {
+  min-width: 0;
+}
+
 .row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -542,7 +553,8 @@ form {
 }
 
 .attendance-detail-row {
-  grid-template-columns: 96px minmax(120px, 1fr) 78px 78px minmax(92px, 0.9fr) 82px;
+  grid-template-columns: 86px minmax(82px, 1fr) 66px 72px minmax(72px, 0.8fr) 72px;
+  gap: 0.55rem;
 }
 
 .empty {
