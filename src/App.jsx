@@ -255,6 +255,25 @@ function targetHoursForBlockRange(block, startDate, endDate) {
   return Math.max(1, Math.ceil(dateDiffDays(effectiveStartDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
 }
 
+function getDefaultTheoryDay(date) {
+  const isFriday = parseIsoLocal(date).getDay() === 5
+  return {
+    officialStartTime: '07:15',
+    officialEndTime: isFriday ? '12:15' : '14:15',
+    fullCreditHours: isFriday ? 6 : 8,
+  }
+}
+
+function getTheoryDaySetting(date, override = {}) {
+  const defaults = getDefaultTheoryDay(date)
+  return {
+    officialStartTime: override?.officialStartTime || defaults.officialStartTime,
+    officialEndTime: override?.officialEndTime || defaults.officialEndTime,
+    fullCreditHours: getFullCreditHours(override?.fullCreditHours ?? defaults.fullCreditHours),
+    teacherConfirmedEarlyEnd: !!override?.teacherConfirmedEarlyEnd,
+  }
+}
+
 function theoryTargetHoursForRange(store, block, startDate, endDate) {
   if (!blockOverlapsRange(block, startDate, endDate)) return 0
   const effectiveStartDate = block.startDate > startDate ? block.startDate : startDate
@@ -265,7 +284,7 @@ function theoryTargetHoursForRange(store, block, startDate, endDate) {
     checkedDays += 1
     if (!isWeekday(date)) continue
     const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
-    total += getFullCreditHours(override?.fullCreditHours)
+    total += getTheoryDaySetting(date, override).fullCreditHours
   }
   return total
 }
@@ -338,17 +357,18 @@ function minutesFromTime(time) {
   return hours * 60 + minutes
 }
 
-function calculateTheoryHours({ checkInTime, checkOutTime, override, choice }) {
+function calculateTheoryHours({ date, checkInTime, checkOutTime, override, choice }) {
   if (choice === 'cancelled') return 0
-  const dayStart = minutesFromTime(override?.officialStartTime || '07:15')
-  const dayEnd = minutesFromTime(override?.officialEndTime || '14:15')
+  const setting = getTheoryDaySetting(date, override)
+  const dayStart = minutesFromTime(setting.officialStartTime)
+  const dayEnd = minutesFromTime(setting.officialEndTime)
   const graceEnd = minutesFromTime('07:40')
-  const fullCredit = getFullCreditHours(override?.fullCreditHours)
+  const fullCredit = setting.fullCreditHours
   const checkIn = minutesFromTime(checkInTime)
   const checkOut = checkOutTime ? minutesFromTime(checkOutTime) : dayEnd
 
-  if (override?.teacherConfirmedEarlyEnd) return fullCredit
-  if (checkIn <= graceEnd && checkOut >= minutesFromTime('13:30')) return fullCredit
+  if (setting.teacherConfirmedEarlyEnd) return fullCredit
+  if (checkIn <= graceEnd && checkOut >= dayEnd) return fullCredit
 
   const lateMinutes = Math.max(0, checkIn - dayStart)
   const earlyLeaveMinutes = Math.max(0, dayEnd - checkOut)
@@ -463,7 +483,7 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
         checkedDays += 1
         if (!isWeekday(date)) continue
         const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
-        const targetHours = getFullCreditHours(override?.fullCreditHours)
+        const targetHours = getTheoryDaySetting(date, override).fullCreditHours
         const attendanceEntries = getTheoryDayEntries(store, block, student.id, date)
         const actualHours = attendanceEntries.reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
         const missingHours = Math.max(0, targetHours - actualHours)
@@ -992,6 +1012,7 @@ function App() {
       updatedAt: new Date().toISOString(),
     }
     patch.calculatedHours = calculateTheoryHours({
+      date: attendance.date,
       checkInTime: attendance.checkInTime,
       checkOutTime: patch.checkOutTime,
       override,
@@ -1062,8 +1083,9 @@ function App() {
     const block = store.blocks.find((item) => item.id === blockId)
     const override = store.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
     const calculatedHours = values.fullCredit
-      ? getFullCreditHours(override?.fullCreditHours)
+      ? getTheoryDaySetting(values.date, override).fullCreditHours
       : calculateTheoryHours({
+          date: values.date,
           checkInTime: values.checkInTime,
           checkOutTime: values.checkOutTime,
           override,
@@ -1100,8 +1122,9 @@ function App() {
       const block = draft.blocks.find((item) => item.id === blockId)
       const override = draft.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
       const calculatedHours = values.fullCredit
-        ? getFullCreditHours(override?.fullCreditHours)
+        ? getTheoryDaySetting(values.date, override).fullCreditHours
         : calculateTheoryHours({
+            date: values.date,
             checkInTime: values.checkInTime,
             checkOutTime: values.checkOutTime,
             override,
@@ -1135,6 +1158,7 @@ function App() {
   async function saveOverride(blockId, date, patch) {
     const existing = store.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
     const block = store.blocks.find((item) => item.id === blockId)
+    const defaults = getDefaultTheoryDay(date)
     if (firebaseEnabled) {
       if (existing) await updateDoc(doc(db, collectionMap.dayOverrides, existing.id), patch)
       else {
@@ -1144,9 +1168,9 @@ function App() {
           blockId,
           courseId: block.courseId,
           date,
-          officialStartTime: '07:15',
-          officialEndTime: '14:15',
-          fullCreditHours: 8,
+          officialStartTime: defaults.officialStartTime,
+          officialEndTime: defaults.officialEndTime,
+          fullCreditHours: defaults.fullCreditHours,
           teacherConfirmedEarlyEnd: false,
           note: '',
           ...patch,
@@ -1163,9 +1187,9 @@ function App() {
           blockId,
           courseId: block.courseId,
           date,
-          officialStartTime: '07:15',
-          officialEndTime: '14:15',
-          fullCreditHours: 8,
+          officialStartTime: defaults.officialStartTime,
+          officialEndTime: defaults.officialEndTime,
+          fullCreditHours: defaults.fullCreditHours,
           teacherConfirmedEarlyEnd: false,
           note: '',
           ...patch,
@@ -1726,7 +1750,12 @@ function BlockManager({ store, selectedCourse, blocks, activeBlock, setActiveBlo
     const threshold = Math.floor(courseStudents.length / 2) + 1
     const grouped = {}
     store.theoryAttendances
-      .filter((entry) => entry.blockId === activeBlock.id && entry.checkoutChoice === 'classEnded' && minutesFromTime(entry.checkOutTime || '14:15') < minutesFromTime('13:30'))
+      .filter((entry) => {
+        if (entry.blockId !== activeBlock.id || entry.checkoutChoice !== 'classEnded') return false
+        const override = store.dayOverrides.find((item) => item.blockId === activeBlock.id && item.date === entry.date)
+        const setting = getTheoryDaySetting(entry.date, override)
+        return minutesFromTime(entry.checkOutTime || setting.officialEndTime) < minutesFromTime(setting.officialEndTime)
+      })
       .forEach((entry) => {
         grouped[entry.date] = (grouped[entry.date] || 0) + 1
       })
@@ -1777,15 +1806,20 @@ function TheoryBlockDetail({ block, qrDataUrl, warnings, saveOverride, addManual
   const courseStudents = store.users
     .filter((user) => user.role === 'student' && user.courseId === block.courseId && user.active)
     .sort((a, b) => getName(a).localeCompare(getName(b)))
-  const [manualEntry, setManualEntry] = useState({
-    studentId: courseStudents[0]?.id || '',
-    date: todayIso(),
-    checkInTime: '07:15',
-    checkOutTime: '14:15',
-    fullCredit: true,
-    hours: '',
+  const [manualEntry, setManualEntry] = useState(() => {
+    const today = todayIso()
+    const defaults = getDefaultTheoryDay(today)
+    return {
+      studentId: courseStudents[0]?.id || '',
+      date: today,
+      checkInTime: defaults.officialStartTime,
+      checkOutTime: defaults.officialEndTime,
+      fullCredit: true,
+      hours: '',
+    }
   })
   const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date) || {}
+  const daySetting = getTheoryDaySetting(date, override)
   const entries = store.theoryAttendances.filter((item) => item.blockId === block.id && item.date === date)
 
   useEffect(() => {
@@ -1816,8 +1850,8 @@ function TheoryBlockDetail({ block, qrDataUrl, warnings, saveOverride, addManual
       ))}
       <div className="day-editor">
         <label>Tag<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-        <label>Start<input type="time" value={override.officialStartTime || '07:15'} onChange={(event) => saveOverride(block.id, date, { officialStartTime: event.target.value })} /></label>
-        <label>Ende<input type="time" value={override.officialEndTime || '14:15'} onChange={(event) => saveOverride(block.id, date, { officialEndTime: event.target.value })} /></label>
+        <label>Start<input type="time" value={daySetting.officialStartTime} onChange={(event) => saveOverride(block.id, date, { officialStartTime: event.target.value })} /></label>
+        <label>Ende<input type="time" value={daySetting.officialEndTime} onChange={(event) => saveOverride(block.id, date, { officialEndTime: event.target.value })} /></label>
         <label className="checkbox"><input type="checkbox" checked={!!override.teacherConfirmedEarlyEnd} onChange={(event) => saveOverride(block.id, date, { teacherConfirmedEarlyEnd: event.target.checked })} /> Voller Tag trotz Sonderzeit</label>
       </div>
       <form className="manual-entry-card" onSubmit={submitManualEntry}>
@@ -1831,7 +1865,11 @@ function TheoryBlockDetail({ block, qrDataUrl, warnings, saveOverride, addManual
               {courseStudents.map((student) => <option value={student.id} key={student.id}>{getName(student)}</option>)}
             </select>
           </label>
-          <label>Datum<input type="date" value={manualEntry.date} onChange={(event) => setManualEntry({ ...manualEntry, date: event.target.value })} /></label>
+          <label>Datum<input type="date" value={manualEntry.date} onChange={(event) => {
+            const nextDate = event.target.value
+            const defaults = getDefaultTheoryDay(nextDate)
+            setManualEntry({ ...manualEntry, date: nextDate, checkInTime: defaults.officialStartTime, checkOutTime: defaults.officialEndTime })
+          }} /></label>
           <label>Von<input type="time" value={manualEntry.checkInTime} onChange={(event) => setManualEntry({ ...manualEntry, checkInTime: event.target.value })} /></label>
           <label>Bis<input type="time" value={manualEntry.checkOutTime} onChange={(event) => setManualEntry({ ...manualEntry, checkOutTime: event.target.value })} /></label>
           <label className="checkbox"><input type="checkbox" checked={manualEntry.fullCredit} onChange={(event) => setManualEntry({ ...manualEntry, fullCredit: event.target.checked })} /> vollen Tag gutschreiben</label>
