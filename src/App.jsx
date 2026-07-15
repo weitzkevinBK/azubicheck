@@ -241,6 +241,11 @@ function targetHoursForBlockRange(block, startDate, endDate) {
   return Math.max(1, Math.ceil(dateDiffDays(effectiveStartDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
 }
 
+function getFullCreditHours(value) {
+  const hours = Number(value || 8)
+  return Number.isFinite(hours) && hours > 0 && hours <= 12 ? hours : 8
+}
+
 function addDaysIso(date, days) {
   const value = new Date(`${date}T00:00:00`)
   value.setDate(value.getDate() + days)
@@ -301,7 +306,7 @@ function calculateTheoryHours({ checkInTime, checkOutTime, override, choice }) {
   const dayStart = minutesFromTime(override?.officialStartTime || '07:15')
   const dayEnd = minutesFromTime(override?.officialEndTime || '14:15')
   const graceEnd = minutesFromTime('07:40')
-  const fullCredit = Number(override?.fullCreditHours || 8)
+  const fullCredit = getFullCreditHours(override?.fullCreditHours)
   const checkIn = minutesFromTime(checkInTime)
   const checkOut = checkOutTime ? minutesFromTime(checkOutTime) : dayEnd
 
@@ -405,7 +410,7 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
         checkedDays += 1
         if (!isWeekday(date)) continue
         const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
-        const targetHours = Number(override?.fullCreditHours || 8)
+        const targetHours = getFullCreditHours(override?.fullCreditHours)
         const actualHours = getTheoryDayHours(store, block, student.id, date)
         const missingHours = Math.max(0, targetHours - actualHours)
         if (missingHours > 0.01) {
@@ -469,21 +474,18 @@ function openAbsenceReport(store, students, title, period) {
             <td>${escapeHtml(getDateRangeLabel(item.startDate, item.endDate))}</td>
             <td>${escapeHtml(item.source)}</td>
             <td>${escapeHtml(item.status)}</td>
-            <td class="hours">${item.hours.toFixed(2)} h</td>
           </tr>
         `).join('')
-      : '<tr><td colspan="4" class="empty">Keine Fehlzeiten bis heute.</td></tr>'
+      : '<tr><td colspan="3" class="empty">Keine Fehlzeiten im gewählten Zeitraum.</td></tr>'
     return `
       <section class="student">
         <h2>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</h2>
         <p class="meta">${escapeHtml(student.courseId)} · ${escapeHtml(student.email || '')}</p>
         <div class="stats">
-          <span>Soll: <strong>${summary.target.toFixed(2)} h</strong></span>
-          <span>Ist: <strong>${summary.actual.toFixed(2)} h</strong></span>
-          <span>Fehlzeit: <strong>${summary.missing.toFixed(2)} h</strong></span>
+          <span>Gesamtfehlzeit: <strong>${summary.missing.toFixed(2)} h</strong></span>
         </div>
         <table>
-          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Status</th><th>Stunden</th></tr></thead>
+          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Status</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </section>
@@ -993,7 +995,7 @@ function App() {
     const block = store.blocks.find((item) => item.id === blockId)
     const override = store.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
     const calculatedHours = values.fullCredit
-      ? Number(override?.fullCreditHours || 8)
+      ? getFullCreditHours(override?.fullCreditHours)
       : calculateTheoryHours({
           checkInTime: values.checkInTime,
           checkOutTime: values.checkOutTime,
@@ -1031,7 +1033,7 @@ function App() {
       const block = draft.blocks.find((item) => item.id === blockId)
       const override = draft.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
       const calculatedHours = values.fullCredit
-        ? Number(override?.fullCreditHours || 8)
+        ? getFullCreditHours(override?.fullCreditHours)
         : calculateTheoryHours({
             checkInTime: values.checkInTime,
             checkOutTime: values.checkOutTime,
