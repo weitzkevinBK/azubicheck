@@ -29,7 +29,8 @@ import {
 } from './firebase'
 import './App.css'
 
-const courses = Array.from({ length: 18 }, (_, index) => `GP-${index + 8}`)
+const courseRenames = { 'GP-8': 'PFA-8' }
+const courses = ['PFA-8', ...Array.from({ length: 17 }, (_, index) => `GP-${index + 9}`)]
 const roleLabels = {
   student: 'Azubi',
   teacher: 'Lehrer',
@@ -127,11 +128,11 @@ const seedState = {
 
 function loadStore() {
   const raw = localStorage.getItem('azubicheck:mvp')
-  if (!raw) return seedState
+  if (!raw) return normalizeStore(seedState)
   try {
-    return { ...seedState, ...JSON.parse(raw) }
+    return normalizeStore({ ...seedState, ...JSON.parse(raw) })
   } catch {
-    return seedState
+    return normalizeStore(seedState)
   }
 }
 
@@ -173,8 +174,35 @@ function getRegistrationSettings(store) {
   return store.settings.find((item) => item.id === 'registration') || {}
 }
 
+function normalizeCourseId(courseId) {
+  return courseRenames[courseId] || courseId
+}
+
+function normalizeCourseData(item) {
+  const normalized = { ...item }
+  if ('courseId' in normalized) normalized.courseId = normalizeCourseId(normalized.courseId)
+  if (Array.isArray(normalized.assignedCourseIds)) {
+    normalized.assignedCourseIds = Array.from(new Set(normalized.assignedCourseIds.map(normalizeCourseId)))
+  }
+  return normalized
+}
+
+function normalizeStore(store) {
+  return {
+    ...store,
+    users: store.users.map(normalizeCourseData),
+    blocks: store.blocks.map(normalizeCourseData),
+    theoryAttendances: store.theoryAttendances.map(normalizeCourseData),
+    practiceAttendances: store.practiceAttendances.map(normalizeCourseData),
+    dayOverrides: store.dayOverrides.map(normalizeCourseData),
+  }
+}
+
 function mergeCollection(store, key, docs) {
-  return { ...store, [key]: docs }
+  const normalizedDocs = ['users', 'blocks', 'theoryAttendances', 'practiceAttendances', 'dayOverrides'].includes(key)
+    ? docs.map(normalizeCourseData)
+    : docs
+  return { ...store, [key]: normalizedDocs }
 }
 
 function dateDiffDays(startDate, endDate) {
