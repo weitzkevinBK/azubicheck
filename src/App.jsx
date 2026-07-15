@@ -255,6 +255,21 @@ function targetHoursForBlockRange(block, startDate, endDate) {
   return Math.max(1, Math.ceil(dateDiffDays(effectiveStartDate, effectiveEndDate) / 7)) * (block.type === 'practice' ? 40 : 38)
 }
 
+function theoryTargetHoursForRange(store, block, startDate, endDate) {
+  if (!blockOverlapsRange(block, startDate, endDate)) return 0
+  const effectiveStartDate = block.startDate > startDate ? block.startDate : startDate
+  const effectiveEndDate = block.endDate < endDate ? block.endDate : endDate
+  let total = 0
+  let checkedDays = 0
+  for (let date = effectiveStartDate; date <= effectiveEndDate && checkedDays < 1500; date = addDaysIso(date, 1)) {
+    checkedDays += 1
+    if (!isWeekday(date)) continue
+    const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
+    total += getFullCreditHours(override?.fullCreditHours)
+  }
+  return total
+}
+
 function getFullCreditHours(value) {
   const hours = Number(value || 8)
   return Number.isFinite(hours) && hours > 0 && hours <= 12 ? hours : 8
@@ -369,6 +384,9 @@ function summarizeStudent(store, student, period) {
     ? studentBlocks.filter((block) => blockOverlapsRange(block, period.startDate, period.endDate))
     : studentBlocks
   const target = scopedBlocks.reduce((sum, block) => {
+    const endDate = period ? period.endDate : todayIso()
+    const startDate = period ? period.startDate : block.startDate
+    if (block.type === 'theory') return sum + theoryTargetHoursForRange(store, block, startDate, endDate)
     if (period) return sum + targetHoursForBlockRange(block, period.startDate, period.endDate)
     return sum + accruedTargetHoursForBlock(block)
   }, 0)
