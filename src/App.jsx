@@ -837,19 +837,19 @@ function App() {
   }
 
   async function handleAttendanceScan(token, options = {}) {
-    if (!currentUser || currentUser.role !== 'student') return
+    if (!currentUser || currentUser.role !== 'student') return { status: 'ignored' }
     const block = store.blocks.find((item) => item.qrToken === token && item.type === 'theory' && item.active)
     if (!block) {
       setMessage('QR-Code wurde nicht als aktiver Theorieblock erkannt.')
-      return
+      return { status: 'error', message: 'QR-Code wurde nicht als aktiver Theorieblock erkannt.' }
     }
     if (block.courseId !== currentUser.courseId) {
       setMessage('Dieser QR-Code gehört nicht zu deinem Kurs.')
-      return
+      return { status: 'error', message: 'Dieser QR-Code gehört nicht zu deinem Kurs.' }
     }
     if (!options.verified) {
       const verified = await verifyDevice()
-      if (!verified) return
+      if (!verified) return { status: 'error', message: 'Face ID / Gerätebestätigung wurde nicht bestätigt.' }
     }
     const date = todayIso()
     const existing = store.theoryAttendances.find(
@@ -872,20 +872,21 @@ function App() {
       }
       if (firebaseEnabled) {
         await setDoc(doc(db, collectionMap.theoryAttendances, attendance.id), attendance)
-        setMessage('Anwesenheit erfasst. Bitte am Unterrichtsende erneut scannen.')
-        return
+        setMessage('Erfolgreich angemeldet.')
+        return { status: 'checked-in', message: 'Erfolgreich angemeldet.' }
       }
       updateStore((draft) => {
         draft.theoryAttendances.push(attendance)
       })
-      setMessage('Anwesenheit erfasst. Bitte am Unterrichtsende erneut scannen.')
-      return
+      setMessage('Erfolgreich angemeldet.')
+      return { status: 'checked-in', message: 'Erfolgreich angemeldet.' }
     }
     if (existing.status === 'checked-out') {
       setMessage('Du bist für heute bereits abgemeldet.')
-      return
+      return { status: 'error', message: 'Du bist für heute bereits abgemeldet.' }
     }
     setCheckoutContext({ attendanceId: existing.id, blockId: block.id })
+    return { status: 'checkout-choice', message: 'Zweiter Scan erkannt.' }
   }
 
   async function finishCheckout(choice) {
@@ -913,7 +914,7 @@ function App() {
     if (firebaseEnabled) {
       await updateDoc(doc(db, collectionMap.theoryAttendances, attendance.id), patch)
       setCheckoutContext(null)
-      setMessage(choice === 'classEnded' ? 'Unterrichtsende gemeldet.' : 'Du wurdest abgemeldet.')
+      setMessage(choice === 'classEnded' ? 'Unterrichtsende erfolgreich gemeldet.' : 'Erfolgreich abgemeldet.')
       return
     }
     updateStore((draft) => {
@@ -921,7 +922,7 @@ function App() {
       Object.assign(draftAttendance, patch)
     })
     setCheckoutContext(null)
-    setMessage(choice === 'classEnded' ? 'Unterrichtsende gemeldet.' : 'Du wurdest abgemeldet.')
+    setMessage(choice === 'classEnded' ? 'Unterrichtsende erfolgreich gemeldet.' : 'Erfolgreich abgemeldet.')
   }
 
   async function savePracticeHours(blockId, studentId, actualHours) {
@@ -1287,6 +1288,7 @@ function AuthScreen({ authMode, setAuthMode, login, registerAccount, message }) 
 function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }) {
   const [scannerOpen, setScannerOpen] = useState(false)
   const [scanBusy, setScanBusy] = useState(false)
+  const [scanResult, setScanResult] = useState(null)
   const summary = summarizeStudent(store, student)
   const entries = store.theoryAttendances
     .filter((item) => item.studentId === student.id)
@@ -1302,7 +1304,11 @@ function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }
 
   async function submitScannedToken(token) {
     setScannerOpen(false)
-    await handleAttendanceScan(token, { verified: true })
+    const result = await handleAttendanceScan(token, { verified: true })
+    if (result?.status === 'checked-in' || result?.status === 'error') {
+      setScanResult(result)
+      window.setTimeout(() => setScanResult(null), 2600)
+    }
   }
 
   return (
@@ -1326,6 +1332,14 @@ function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }
           onScan={submitScannedToken}
           onClose={() => setScannerOpen(false)}
         />
+      )}
+      {scanResult && (
+        <div className="modal-backdrop">
+          <section className={`modal scan-result-modal ${scanResult.status === 'error' ? 'error' : 'success'}`}>
+            <h2>{scanResult.message}</h2>
+            <p>{scanResult.status === 'error' ? 'Du bist wieder im Azubi-Dashboard.' : 'Du bist wieder im Azubi-Dashboard. Bitte scanne am Unterrichtsende erneut.'}</p>
+          </section>
+        </div>
       )}
       <StatsCards summary={summary} />
       <section className="panel span-2">
@@ -1456,13 +1470,21 @@ function QrScanModal({ onScan, onClose }) {
     let mounted = true
     const scanner = new Html5Qrcode(readerId)
 
+    async function stopScanner() {
+      try {
+        if (scanner.getState?.() === 2) await scanner.stop()
+      } catch {
+        // Scanner may already be stopped while the modal is closing.
+      }
+    }
+
     scanner.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 260, height: 260 } },
       async (decodedText) => {
         if (lockedRef.current) return
         lockedRef.current = true
-        await scanner.stop().catch(() => {})
+        await stopScanner()
         if (mounted) onScan(decodedText)
       },
       () => {},
@@ -1472,7 +1494,7 @@ function QrScanModal({ onScan, onClose }) {
 
     return () => {
       mounted = false
-      scanner.stop().catch(() => {})
+      stopScanner()
     }
   }, [onScan])
 
