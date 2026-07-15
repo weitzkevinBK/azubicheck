@@ -262,6 +262,24 @@ function formatDate(date) {
   return date.split('-').reverse().join('.')
 }
 
+function getDateRangeLabel(startDate, endDate) {
+  return startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} bis ${formatDate(endDate)}`
+}
+
+function getSchoolDayCount(startDate, endDate) {
+  let count = 0
+  for (let date = startDate; date <= endDate; date = addDaysIso(date, 1)) {
+    if (isWeekday(date)) count += 1
+  }
+  return count
+}
+
+function nextSchoolDay(date) {
+  let next = addDaysIso(date, 1)
+  while (!isWeekday(next)) next = addDaysIso(next, 1)
+  return next
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -361,6 +379,27 @@ function getTheoryDayHours(store, block, studentId, date) {
     .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
 }
 
+function groupReportAbsences(items) {
+  return items
+    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.source.localeCompare(b.source))
+    .reduce((groups, item) => {
+      const previous = groups[groups.length - 1]
+      const canGroup = previous
+        && previous.status === 'Fehltag'
+        && item.status === 'Fehltag'
+        && previous.source === item.source
+        && item.startDate === nextSchoolDay(previous.endDate)
+      if (canGroup) {
+        previous.endDate = item.endDate
+        previous.hours += item.hours
+        previous.days += 1
+        return groups
+      }
+      groups.push({ ...item, days: getSchoolDayCount(item.startDate, item.endDate) })
+      return groups
+    }, [])
+}
+
 function getAbsenceItems(store, student, period = { startDate: '0000-01-01', endDate: todayIso() }) {
   const items = []
   const referenceDate = period.endDate < todayIso() ? period.endDate : todayIso()
@@ -437,16 +476,18 @@ function openAbsenceReport(store, students, title, period) {
     .sort((a, b) => getName(a).localeCompare(getName(b)))
   const studentSections = reportStudents.map((student) => {
     const summary = summarizeStudent(store, student, { startDate: reportPeriod.startDate, endDate: evaluatedUntil })
-    const absences = getAbsenceItems(store, student, { startDate: reportPeriod.startDate, endDate: reportPeriod.endDate })
+    const absences = groupReportAbsences(getAbsenceItems(store, student, { startDate: reportPeriod.startDate, endDate: reportPeriod.endDate }))
     const rows = absences.length
       ? absences.map((item) => `
           <tr>
-            <td>${escapeHtml(formatDate(item.startDate))}</td>
+            <td>${escapeHtml(getDateRangeLabel(item.startDate, item.endDate))}</td>
             <td>${escapeHtml(item.source)}</td>
+            <td>${escapeHtml(`${item.days} ${item.days === 1 ? 'Tag' : 'Tage'}`)}</td>
             <td>${escapeHtml(item.status)}</td>
+            <td class="hours">${item.hours.toFixed(2)} h</td>
           </tr>
         `).join('')
-      : '<tr><td colspan="3" class="empty">Keine Fehlzeiten im gewählten Zeitraum.</td></tr>'
+      : '<tr><td colspan="5" class="empty">Keine Fehlzeiten im gewählten Zeitraum.</td></tr>'
     return `
       <section class="student">
         <h2>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</h2>
@@ -455,7 +496,7 @@ function openAbsenceReport(store, students, title, period) {
           <span>Gesamtfehlzeit: <strong>${summary.missing.toFixed(2)} h</strong></span>
         </div>
         <table>
-          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Status</th></tr></thead>
+          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Tage</th><th>Status</th><th>Fehlstunden</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </section>
