@@ -257,19 +257,9 @@ function isWeekday(date) {
   return day !== 0 && day !== 6
 }
 
-function nextSchoolDay(date) {
-  let next = addDaysIso(date, 1)
-  while (!isWeekday(next)) next = addDaysIso(next, 1)
-  return next
-}
-
 function formatDate(date) {
   if (!date) return ''
   return date.split('-').reverse().join('.')
-}
-
-function getDateRangeLabel(startDate, endDate) {
-  return startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} bis ${formatDate(endDate)}`
 }
 
 function escapeHtml(value) {
@@ -371,26 +361,6 @@ function getTheoryDayHours(store, block, studentId, date) {
     .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
 }
 
-function groupAbsenceItems(items) {
-  return items
-    .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.source.localeCompare(b.source))
-    .reduce((groups, item) => {
-      const previous = groups[groups.length - 1]
-      const canMerge = previous
-        && previous.status === 'Fehltag'
-        && item.status === 'Fehltag'
-        && previous.source === item.source
-        && item.startDate === nextSchoolDay(previous.endDate)
-      if (canMerge) {
-        previous.endDate = item.endDate
-        previous.hours += item.hours
-        return groups
-      }
-      groups.push({ ...item })
-      return groups
-    }, [])
-}
-
 function getAbsenceItems(store, student, period = { startDate: '0000-01-01', endDate: todayIso() }) {
   const items = []
   const referenceDate = period.endDate < todayIso() ? period.endDate : todayIso()
@@ -442,7 +412,7 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
     }
   })
 
-  return groupAbsenceItems(items)
+  return items.sort((a, b) => a.startDate.localeCompare(b.startDate) || a.source.localeCompare(b.source))
 }
 
 function openAbsenceReport(store, students, title, period) {
@@ -471,7 +441,7 @@ function openAbsenceReport(store, students, title, period) {
     const rows = absences.length
       ? absences.map((item) => `
           <tr>
-            <td>${escapeHtml(getDateRangeLabel(item.startDate, item.endDate))}</td>
+            <td>${escapeHtml(formatDate(item.startDate))}</td>
             <td>${escapeHtml(item.source)}</td>
             <td>${escapeHtml(item.status)}</td>
           </tr>
