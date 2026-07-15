@@ -39,7 +39,19 @@ const roleLabels = {
   admin: 'Admin',
 }
 
-const todayIso = () => new Date().toISOString().slice(0, 10)
+function formatIsoDate(value) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseIsoLocal(date) {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+const todayIso = () => formatIsoDate(new Date())
 const nowTime = () => new Date().toTimeString().slice(0, 5)
 
 const seedState = {
@@ -207,13 +219,15 @@ function mergeCollection(store, key, docs) {
 }
 
 function dateDiffDays(startDate, endDate) {
-  const start = new Date(`${startDate}T00:00:00`)
-  const end = new Date(`${endDate}T00:00:00`)
+  const [startYear, startMonth, startDay] = startDate.split('-').map(Number)
+  const [endYear, endMonth, endDay] = endDate.split('-').map(Number)
+  const start = Date.UTC(startYear, startMonth - 1, startDay)
+  const end = Date.UTC(endYear, endMonth - 1, endDay)
   return Math.max(1, Math.floor((end - start) / 86400000) + 1)
 }
 
 function isValidIsoDate(date) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(new Date(`${date}T00:00:00`).getTime())
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(parseIsoLocal(date).getTime())
 }
 
 function blockWeeks(block) {
@@ -247,13 +261,13 @@ function getFullCreditHours(value) {
 }
 
 function addDaysIso(date, days) {
-  const value = new Date(`${date}T00:00:00`)
+  const value = parseIsoLocal(date)
   value.setDate(value.getDate() + days)
-  return value.toISOString().slice(0, 10)
+  return formatIsoDate(value)
 }
 
 function isWeekday(date) {
-  const day = new Date(`${date}T00:00:00`).getDay()
+  const day = parseIsoLocal(date).getDay()
   return day !== 0 && day !== 6
 }
 
