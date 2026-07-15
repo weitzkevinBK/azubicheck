@@ -541,6 +541,10 @@ form {
   font-size: 0.9rem;
 }
 
+.attendance-detail-row {
+  grid-template-columns: 96px minmax(120px, 1fr) 78px 78px minmax(92px, 0.9fr) 82px;
+}
+
 .empty {
   color: var(--muted);
   border: 1px dashed var(--border);

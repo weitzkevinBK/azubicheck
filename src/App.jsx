@@ -1571,11 +1571,13 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             <StatsCards summary={summary} />
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
             <div className="table compact">
-              <div className="row header"><span>Datum</span><span>Quelle</span><span>Status</span><span>Stunden</span></div>
+              <div className="row attendance-detail-row header"><span>Datum</span><span>Quelle</span><span>Check-in</span><span>Check-out</span><span>Status</span><span>Stunden</span></div>
               {details.map((entry) => (
-                <div className="row" key={entry.id}>
+                <div className="row attendance-detail-row" key={entry.id}>
                   <span>{entry.date}</span>
                   <span>{entry.source}</span>
+                  <span>{entry.checkInTime || '-'}</span>
+                  <span>{entry.checkOutTime || '-'}</span>
                   <span>{entry.status || 'eingetragen'}</span>
                   <strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong>
                 </div>
