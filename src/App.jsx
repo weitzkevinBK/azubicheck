@@ -386,6 +386,11 @@ function getAttendanceTimeLabel(entries) {
   return times.length ? times.join(', ') : '-'
 }
 
+function formatHours(value) {
+  const hours = Number(value || 0)
+  return `${Number.isFinite(hours) ? hours.toFixed(2) : '0.00'} h`
+}
+
 function groupReportAbsences(items) {
   return items
     .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.source.localeCompare(b.source))
@@ -484,6 +489,7 @@ function openAbsenceReport(store, students, title, period) {
     .filter((student) => student.role === 'student' && student.active)
     .sort((a, b) => getName(a).localeCompare(getName(b)))
   const studentSections = reportStudents.map((student) => {
+    try {
     const summary = summarizeStudent(store, student, { startDate: reportPeriod.startDate, endDate: evaluatedUntil })
     const absences = groupReportAbsences(getAbsenceItems(store, student, { startDate: reportPeriod.startDate, endDate: reportPeriod.endDate }))
     const rows = absences.length
@@ -494,7 +500,7 @@ function openAbsenceReport(store, students, title, period) {
             <td>${escapeHtml(`${item.days} ${item.days === 1 ? 'Tag' : 'Tage'}`)}</td>
             <td>${escapeHtml(item.timeLabel || '-')}</td>
             <td>${escapeHtml(item.status)}</td>
-            <td class="hours">${item.hours.toFixed(2)} h</td>
+            <td class="hours">${escapeHtml(formatHours(item.hours))}</td>
           </tr>
         `).join('')
       : '<tr><td colspan="6" class="empty">Keine Fehlzeiten im gewählten Zeitraum.</td></tr>'
@@ -503,7 +509,7 @@ function openAbsenceReport(store, students, title, period) {
         <h2>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</h2>
         <p class="meta">${escapeHtml(student.courseId)} · ${escapeHtml(student.email || '')}</p>
         <div class="stats">
-          <span>Gesamtfehlzeit: <strong>${summary.missing.toFixed(2)} h</strong></span>
+          <span>Gesamtfehlzeit: <strong>${escapeHtml(formatHours(summary.missing))}</strong></span>
         </div>
         <table>
           <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Tage</th><th>Check-in / Check-out</th><th>Status</th><th>Fehlstunden</th></tr></thead>
@@ -511,6 +517,14 @@ function openAbsenceReport(store, students, title, period) {
         </table>
       </section>
     `
+    } catch {
+      return `
+        <section class="student">
+          <h2>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</h2>
+          <p class="empty">Dieser Datensatz konnte im Bericht nicht ausgewertet werden.</p>
+        </section>
+      `
+    }
   }).join('')
   const html = `<!doctype html>
     <html lang="de">
@@ -1559,10 +1573,7 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
   const [reportPeriod, setReportPeriod] = useState({ startDate: `${new Date().getFullYear()}-01-01`, endDate: todayIso() })
   const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
   const details = selectedStudent
-    ? [
-        ...store.theoryAttendances.filter((entry) => entry.studentId === selectedStudent.id).map((entry) => ({ ...entry, source: 'Theorie' })),
-        ...store.practiceAttendances.filter((entry) => entry.studentId === selectedStudent.id).map((entry) => ({ ...entry, date: entry.enteredAt?.slice(0, 10), source: 'Praxis', adjustedHours: entry.actualHours })),
-      ].sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    ? getAbsenceItems(store, selectedStudent).sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)) || a.source.localeCompare(b.source))
     : []
   return (
     <div className="split">
@@ -1613,18 +1624,17 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
             <div className="table-scroll">
               <div className="table compact attendance-detail-table">
-                <div className="row attendance-detail-row header"><span>Datum</span><span>Quelle</span><span>Check-in</span><span>Check-out</span><span>Status</span><span>Stunden</span></div>
+                <div className="row attendance-detail-row header"><span>Datum / Zeitraum</span><span>Quelle</span><span>Zeiten</span><span>Status</span><span>Fehlstunden</span></div>
                 {details.map((entry) => (
-                  <div className="row attendance-detail-row" key={entry.id}>
-                    <span>{entry.date}</span>
+                  <div className="row attendance-detail-row" key={`${entry.startDate}-${entry.endDate}-${entry.source}-${entry.status}`}>
+                    <span>{getDateRangeLabel(entry.startDate, entry.endDate)}</span>
                     <span>{entry.source}</span>
-                    <span>{entry.checkInTime || '-'}</span>
-                    <span>{entry.checkOutTime || '-'}</span>
-                    <span>{entry.status || 'eingetragen'}</span>
-                    <strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong>
+                    <span>{entry.timeLabel || '-'}</span>
+                    <span>{entry.status}</span>
+                    <strong>{formatHours(entry.hours)}</strong>
                   </div>
                 ))}
-                {!details.length && <div className="empty">Noch keine Tagesdaten.</div>}
+                {!details.length && <div className="empty">Keine Fehlzeiten vorhanden.</div>}
               </div>
             </div>
           </>

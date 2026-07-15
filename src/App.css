@@ -553,7 +553,7 @@ form {
 }
 
 .attendance-detail-row {
-  grid-template-columns: 86px minmax(82px, 1fr) 66px 72px minmax(72px, 0.8fr) 72px;
+  grid-template-columns: minmax(112px, 1.2fr) minmax(92px, 1fr) minmax(86px, 1fr) minmax(86px, 0.9fr) 84px;
   gap: 0.55rem;
 }
 
