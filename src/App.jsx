@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
+import { Html5Qrcode } from 'html5-qrcode'
 import {
   AlertTriangle,
   BookOpen,
@@ -271,6 +272,21 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;')
 }
 
+function bufferToBase64Url(buffer) {
+  const bytes = new Uint8Array(buffer)
+  let value = ''
+  bytes.forEach((byte) => {
+    value += String.fromCharCode(byte)
+  })
+  return btoa(value).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+}
+
+function base64UrlToBuffer(value) {
+  const base64 = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
+  const binary = atob(base64)
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0))
+}
+
 function minutesFromTime(time) {
   const [hours, minutes] = time.split(':').map(Number)
   return hours * 60 + minutes
@@ -499,7 +515,6 @@ function App() {
   const [selectedCourse, setSelectedCourse] = useState('GP-12')
   const [selectedStudentId, setSelectedStudentId] = useState('')
   const [activeBlockId, setActiveBlockId] = useState('block-demo-theory')
-  const [scanToken, setScanToken] = useState('AZUBICHECK:block-demo-theory')
   const [checkoutContext, setCheckoutContext] = useState(null)
   const [message, setMessage] = useState('')
 
@@ -753,25 +768,75 @@ function App() {
 
   async function verifyDevice() {
     if (!window.PublicKeyCredential || !navigator.credentials) {
-      return window.confirm('Demo-Geräteprüfung: Anwesenheit ohne FaceID/Windows Hello fortsetzen?')
+      return window.confirm('Dieses Gerät unterstützt keine Face ID / Windows Hello im Browser. Trotzdem mit Kamera-Scan fortfahren?')
     }
     try {
+      const platformAvailable = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+      if (!platformAvailable) {
+        return window.confirm('Auf diesem Gerät ist keine Face ID / Windows Hello Bestätigung verfügbar. Trotzdem mit Kamera-Scan fortfahren?')
+      }
+
       const challenge = new Uint8Array(32)
       window.crypto.getRandomValues(challenge)
-      await navigator.credentials.get({
+
+      if (currentUser.deviceCredentialId) {
+        await navigator.credentials.get({
+          publicKey: {
+            challenge,
+            timeout: 60000,
+            userVerification: 'required',
+            allowCredentials: [
+              {
+                id: base64UrlToBuffer(currentUser.deviceCredentialId),
+                type: 'public-key',
+              },
+            ],
+          },
+        })
+        return true
+      }
+
+      const credential = await navigator.credentials.create({
         publicKey: {
           challenge,
-          timeout: 30000,
-          userVerification: 'required',
+          rp: { name: 'AzubiCheck' },
+          user: {
+            id: new TextEncoder().encode(currentUser.id).slice(0, 64),
+            name: currentUser.email || currentUser.id,
+            displayName: `${currentUser.firstName} ${currentUser.lastName}`.trim() || currentUser.email || 'AzubiCheck',
+          },
+          pubKeyCredParams: [
+            { type: 'public-key', alg: -7 },
+            { type: 'public-key', alg: -257 },
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: 'platform',
+            residentKey: 'preferred',
+            userVerification: 'required',
+          },
+          timeout: 60000,
+          attestation: 'none',
         },
       })
+
+      const deviceCredentialId = bufferToBase64Url(credential.rawId)
+      if (firebaseEnabled) {
+        await updateDoc(doc(db, collectionMap.users, currentUser.id), { deviceCredentialId })
+      } else {
+        updateStore((draft) => {
+          const user = draft.users.find((item) => item.id === currentUser.id)
+          if (user) user.deviceCredentialId = deviceCredentialId
+        })
+      }
+      setMessage('Gerät wurde für Face ID / Gerätebestätigung verbunden.')
       return true
     } catch {
-      return window.confirm('Biometrie konnte nicht bestätigt werden. Im Demo-Modus trotzdem fortsetzen?')
+      setMessage('Face ID / Gerätebestätigung wurde abgebrochen oder konnte nicht bestätigt werden.')
+      return false
     }
   }
 
-  async function handleAttendanceScan(token) {
+  async function handleAttendanceScan(token, options = {}) {
     if (!currentUser || currentUser.role !== 'student') return
     const block = store.blocks.find((item) => item.qrToken === token && item.type === 'theory' && item.active)
     if (!block) {
@@ -782,8 +847,10 @@ function App() {
       setMessage('Dieser QR-Code gehört nicht zu deinem Kurs.')
       return
     }
-    const verified = await verifyDevice()
-    if (!verified) return
+    if (!options.verified) {
+      const verified = await verifyDevice()
+      if (!verified) return
+    }
     const date = todayIso()
     const existing = store.theoryAttendances.find(
       (item) => item.blockId === block.id && item.studentId === currentUser.id && item.date === date,
@@ -1098,8 +1165,7 @@ function App() {
         <StudentDashboard
           store={store}
           student={currentUser}
-          scanToken={scanToken}
-          setScanToken={setScanToken}
+          verifyDevice={verifyDevice}
           handleAttendanceScan={handleAttendanceScan}
         />
       )}
@@ -1218,12 +1284,27 @@ function AuthScreen({ authMode, setAuthMode, login, registerAccount, message }) 
   )
 }
 
-function StudentDashboard({ store, student, scanToken, setScanToken, handleAttendanceScan }) {
+function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }) {
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const [scanBusy, setScanBusy] = useState(false)
   const summary = summarizeStudent(store, student)
   const entries = store.theoryAttendances
     .filter((item) => item.studentId === student.id)
     .map((item) => ({ ...item, block: store.blocks.find((block) => block.id === item.blockId) }))
     .sort((a, b) => b.date.localeCompare(a.date))
+
+  async function startScanFlow() {
+    setScanBusy(true)
+    const verified = await verifyDevice()
+    setScanBusy(false)
+    if (verified) setScannerOpen(true)
+  }
+
+  async function submitScannedToken(token) {
+    setScannerOpen(false)
+    await handleAttendanceScan(token, { verified: true })
+  }
+
   return (
     <main className="dashboard-grid">
       <section className="panel student-hero">
@@ -1234,10 +1315,18 @@ function StudentDashboard({ store, student, scanToken, setScanToken, handleAtten
         </div>
         <div className="scan-card">
           <Fingerprint size={34} />
-          <label>QR-Code / Demo-Code<input value={scanToken} onChange={(event) => setScanToken(event.target.value)} /></label>
-          <button className="btn primary full" onClick={() => handleAttendanceScan(scanToken)}>Anwesend</button>
+          <p>Bestätige dich zuerst mit Face ID oder Geräte-PIN. Danach öffnet sich die Kamera für den QR-Code im Klassenraum.</p>
+          <button className="btn primary full" onClick={startScanFlow} disabled={scanBusy}>
+            {scanBusy ? 'Bestätigung läuft...' : 'Anwesend'}
+          </button>
         </div>
       </section>
+      {scannerOpen && (
+        <QrScanModal
+          onScan={submitScannedToken}
+          onClose={() => setScannerOpen(false)}
+        />
+      )}
       <StatsCards summary={summary} />
       <section className="panel span-2">
         <h2>Meine Anwesenheiten</h2>
@@ -1355,6 +1444,50 @@ function StatsCards({ summary }) {
       <article className="stat-card"><Check size={20} /><span>Ist</span><strong>{summary.actual.toFixed(2)} h</strong></article>
       <article className={`stat-card ${summary.missing > 0 ? 'danger' : 'ok'}`}><AlertTriangle size={20} /><span>Fehlzeit</span><strong>{summary.missing.toFixed(2)} h</strong></article>
     </section>
+  )
+}
+
+function QrScanModal({ onScan, onClose }) {
+  const readerId = 'azubicheck-camera-reader'
+  const lockedRef = useRef(false)
+  const [scanError, setScanError] = useState('')
+
+  useEffect(() => {
+    let mounted = true
+    const scanner = new Html5Qrcode(readerId)
+
+    scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 260, height: 260 } },
+      async (decodedText) => {
+        if (lockedRef.current) return
+        lockedRef.current = true
+        await scanner.stop().catch(() => {})
+        if (mounted) onScan(decodedText)
+      },
+      () => {},
+    ).catch(() => {
+      if (mounted) setScanError('Kamera konnte nicht gestartet werden. Bitte Kamerazugriff erlauben und erneut versuchen.')
+    })
+
+    return () => {
+      mounted = false
+      scanner.stop().catch(() => {})
+    }
+  }, [onScan])
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal qr-modal">
+        <h2>QR-Code scannen</h2>
+        <p>Halte die Kamera auf den ausgedruckten Code im Klassenraum.</p>
+        <div id={readerId} className="camera-reader" />
+        {scanError && <div className="form-message">{scanError}</div>}
+        <div className="modal-actions">
+          <button type="button" className="btn secondary" onClick={onClose}>Abbrechen</button>
+        </div>
+      </section>
+    </div>
   )
 }
 

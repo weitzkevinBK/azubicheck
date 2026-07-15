@@ -738,6 +738,23 @@ form {
   padding: 1.3rem;
 }
 
+.qr-modal {
+  width: min(560px, 100%);
+}
+
+.camera-reader {
+  width: 100%;
+  min-height: 320px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.camera-reader video {
+  border-radius: 10px;
+}
+
 .modal-actions {
   display: flex;
   gap: 0.75rem;
