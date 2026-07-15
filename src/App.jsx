@@ -373,10 +373,17 @@ function summarizeStudent(store, student, period) {
   return { target, actual, missing: Math.max(0, target - actual) }
 }
 
-function getTheoryDayHours(store, block, studentId, date) {
+function getTheoryDayEntries(store, block, studentId, date) {
   return store.theoryAttendances
     .filter((entry) => entry.blockId === block.id && entry.studentId === studentId && entry.date === date)
-    .reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
+    .sort((a, b) => (a.checkInTime || '').localeCompare(b.checkInTime || ''))
+}
+
+function getAttendanceTimeLabel(entries) {
+  const times = entries
+    .map((entry) => `${entry.checkInTime || '-'} / ${entry.checkOutTime || '-'}`)
+    .filter((value) => value !== '- / -')
+  return times.length ? times.join(', ') : '-'
 }
 
 function groupReportAbsences(items) {
@@ -420,7 +427,8 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
         if (!isWeekday(date)) continue
         const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
         const targetHours = getFullCreditHours(override?.fullCreditHours)
-        const actualHours = getTheoryDayHours(store, block, student.id, date)
+        const attendanceEntries = getTheoryDayEntries(store, block, student.id, date)
+        const actualHours = attendanceEntries.reduce((sum, entry) => sum + Number(entry.adjustedHours ?? entry.calculatedHours ?? 0), 0)
         const missingHours = Math.max(0, targetHours - actualHours)
         if (missingHours > 0.01) {
           items.push({
@@ -428,6 +436,7 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
             endDate: date,
             source: `Theorie Block ${block.blockNumber}`,
             status: actualHours > 0 ? 'Teilfehlzeit' : 'Fehltag',
+            timeLabel: actualHours > 0 ? getAttendanceTimeLabel(attendanceEntries) : '-',
             hours: missingHours,
           })
         }
@@ -483,11 +492,12 @@ function openAbsenceReport(store, students, title, period) {
             <td>${escapeHtml(getDateRangeLabel(item.startDate, item.endDate))}</td>
             <td>${escapeHtml(item.source)}</td>
             <td>${escapeHtml(`${item.days} ${item.days === 1 ? 'Tag' : 'Tage'}`)}</td>
+            <td>${escapeHtml(item.timeLabel || '-')}</td>
             <td>${escapeHtml(item.status)}</td>
             <td class="hours">${item.hours.toFixed(2)} h</td>
           </tr>
         `).join('')
-      : '<tr><td colspan="5" class="empty">Keine Fehlzeiten im gewählten Zeitraum.</td></tr>'
+      : '<tr><td colspan="6" class="empty">Keine Fehlzeiten im gewählten Zeitraum.</td></tr>'
     return `
       <section class="student">
         <h2>${escapeHtml(student.lastName)}, ${escapeHtml(student.firstName)}</h2>
@@ -496,7 +506,7 @@ function openAbsenceReport(store, students, title, period) {
           <span>Gesamtfehlzeit: <strong>${summary.missing.toFixed(2)} h</strong></span>
         </div>
         <table>
-          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Tage</th><th>Status</th><th>Fehlstunden</th></tr></thead>
+          <thead><tr><th>Datum / Zeitraum</th><th>Quelle</th><th>Tage</th><th>Check-in / Check-out</th><th>Status</th><th>Fehlstunden</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </section>
