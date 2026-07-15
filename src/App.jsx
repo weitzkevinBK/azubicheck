@@ -212,6 +212,10 @@ function dateDiffDays(startDate, endDate) {
   return Math.max(1, Math.floor((end - start) / 86400000) + 1)
 }
 
+function isValidIsoDate(date) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(new Date(`${date}T00:00:00`).getTime())
+}
+
 function blockWeeks(block) {
   return Math.max(1, Math.ceil(dateDiffDays(block.startDate, block.endDate) / 7))
 }
@@ -396,7 +400,9 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
     const effectiveStartDate = block.startDate > period.startDate ? block.startDate : period.startDate
     const effectiveEndDate = block.endDate < referenceDate ? block.endDate : referenceDate
     if (block.type === 'theory') {
-      for (let date = effectiveStartDate; date <= effectiveEndDate; date = addDaysIso(date, 1)) {
+      let checkedDays = 0
+      for (let date = effectiveStartDate; date <= effectiveEndDate && checkedDays < 1500; date = addDaysIso(date, 1)) {
+        checkedDays += 1
         if (!isWeekday(date)) continue
         const override = store.dayOverrides.find((item) => item.blockId === block.id && item.date === date)
         const targetHours = Number(override?.fullCreditHours || 8)
@@ -435,8 +441,21 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
 }
 
 function openAbsenceReport(store, students, title, period) {
+  const reportWindow = window.open('', '_blank')
+  if (!reportWindow) return false
+  reportWindow.document.open()
+  reportWindow.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8" /><title>Bericht wird erstellt</title><style>body{font-family:Arial,sans-serif;margin:32px;color:#111827}</style></head><body><h1>Bericht wird erstellt...</h1><p>Die Fehlzeiten werden gerade berechnet.</p></body></html>`)
+  reportWindow.document.close()
+  reportWindow.focus()
+
   const generatedAt = new Date().toLocaleString('de-DE')
   const reportPeriod = period || { startDate: '0000-01-01', endDate: todayIso() }
+  if (!isValidIsoDate(reportPeriod.startDate) || !isValidIsoDate(reportPeriod.endDate) || reportPeriod.startDate > reportPeriod.endDate) {
+    reportWindow.document.open()
+    reportWindow.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8" /><title>Bericht nicht möglich</title><style>body{font-family:Arial,sans-serif;margin:32px;color:#111827}</style></head><body><h1>Bericht nicht möglich</h1><p>Bitte prüfe den gewählten Zeitraum.</p></body></html>`)
+    reportWindow.document.close()
+    return false
+  }
   const evaluatedUntil = reportPeriod.endDate < todayIso() ? reportPeriod.endDate : todayIso()
   const reportStudents = students
     .filter((student) => student.role === 'student' && student.active)
@@ -497,12 +516,11 @@ function openAbsenceReport(store, students, title, period) {
         ${studentSections || '<p class="empty">Keine Azubis für diesen Bericht.</p>'}
       </body>
     </html>`
-  const reportWindow = window.open('', '_blank')
-  if (!reportWindow) return
   reportWindow.document.open()
   reportWindow.document.write(html)
   reportWindow.document.close()
   reportWindow.focus()
+  return true
 }
 
 function App() {
@@ -1598,8 +1616,8 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             onSubmit={(event) => {
               event.preventDefault()
               if (reportPeriod.startDate > reportPeriod.endDate) return
-              openAbsenceReport(store, reportRequest.students, reportRequest.title, reportPeriod)
-              setReportRequest(null)
+              const opened = openAbsenceReport(store, reportRequest.students, reportRequest.title, reportPeriod)
+              if (opened) setReportRequest(null)
             }}
           >
             <h2>Zeitraum auswählen</h2>
