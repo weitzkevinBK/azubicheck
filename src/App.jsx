@@ -979,6 +979,12 @@ function App() {
       }
       if (firebaseEnabled) {
         await setDoc(doc(db, collectionMap.theoryAttendances, attendance.id), attendance)
+        setStore((previous) => ({
+          ...previous,
+          theoryAttendances: previous.theoryAttendances.some((item) => item.id === attendance.id)
+            ? previous.theoryAttendances
+            : [...previous.theoryAttendances, attendance],
+        }))
         setMessage('Erfolgreich angemeldet.')
         return { status: 'checked-in', message: 'Erfolgreich angemeldet.' }
       }
@@ -1456,11 +1462,12 @@ function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }
       <section className="panel span-2">
         <h2>Meine Anwesenheiten</h2>
         <div className="table">
-          <div className="row header"><span>Datum</span><span>Block</span><span>Status</span><span>Stunden</span></div>
+          <div className="row student-attendance-row header"><span>Datum</span><span>Block</span><span>Scanzeit</span><span>Status</span><span>Stunden</span></div>
           {entries.map((entry) => (
-            <div className="row" key={entry.id}>
+            <div className="row student-attendance-row" key={entry.id}>
               <span>{entry.date}</span>
               <span>{entry.block?.courseId} Block {entry.block?.blockNumber}</span>
+              <span>{entry.checkInTime || '-'}</span>
               <span>{entry.status === 'checked-out' ? 'Abgeschlossen' : 'Eingecheckt'}</span>
               <strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong>
             </div>

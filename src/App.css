@@ -552,6 +552,10 @@ form {
   font-size: 0.9rem;
 }
 
+.student-attendance-row {
+  grid-template-columns: minmax(92px, 0.8fr) minmax(128px, 1.25fr) minmax(76px, 0.7fr) minmax(100px, 0.9fr) minmax(72px, 0.65fr);
+}
+
 .attendance-detail-row {
   grid-template-columns: minmax(112px, 1.2fr) minmax(92px, 1fr) minmax(86px, 1fr) minmax(86px, 0.9fr) 84px;
   gap: 0.55rem;
