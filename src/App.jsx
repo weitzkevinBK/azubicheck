@@ -266,10 +266,15 @@ function getDefaultTheoryDay(date) {
 
 function getTheoryDaySetting(date, override = {}) {
   const defaults = getDefaultTheoryDay(date)
+  const isFriday = parseIsoLocal(date).getDay() === 5
+  const overrideHours = Number(override?.fullCreditHours)
+  const legacyFridayDefault = isFriday
+    && overrideHours === 8
+    && (!override?.officialEndTime || override.officialEndTime === '14:15')
   return {
     officialStartTime: override?.officialStartTime || defaults.officialStartTime,
-    officialEndTime: override?.officialEndTime || defaults.officialEndTime,
-    fullCreditHours: getFullCreditHours(override?.fullCreditHours ?? defaults.fullCreditHours),
+    officialEndTime: legacyFridayDefault ? defaults.officialEndTime : override?.officialEndTime || defaults.officialEndTime,
+    fullCreditHours: legacyFridayDefault ? defaults.fullCreditHours : getFullCreditHours(override?.fullCreditHours ?? defaults.fullCreditHours),
     teacherConfirmedEarlyEnd: !!override?.teacherConfirmedEarlyEnd,
   }
 }
