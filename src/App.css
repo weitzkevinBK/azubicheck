@@ -557,8 +557,18 @@ form {
 }
 
 .attendance-detail-row {
-  grid-template-columns: minmax(112px, 1.2fr) minmax(92px, 1fr) minmax(86px, 1fr) minmax(86px, 0.9fr) 84px;
+  grid-template-columns: minmax(112px, 1.15fr) minmax(92px, 1fr) minmax(82px, 0.95fr) minmax(82px, 0.85fr) 78px 48px;
   gap: 0.55rem;
+}
+
+.row-action {
+  display: flex;
+  justify-content: center;
+}
+
+.compact-action {
+  width: 32px;
+  height: 32px;
 }
 
 .empty {

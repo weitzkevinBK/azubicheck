@@ -489,6 +489,7 @@ function getAbsenceItems(store, student, period = { startDate: '0000-01-01', end
         const missingHours = Math.max(0, targetHours - actualHours)
         if (missingHours > 0.01) {
           items.push({
+            blockId: block.id,
             startDate: date,
             endDate: date,
             source: `Theorie Block ${block.blockNumber}`,
@@ -1161,6 +1162,49 @@ function App() {
     setMessage('Theorie-Anwesenheit wurde manuell nachgetragen.')
   }
 
+  async function creditFullTheoryDay(blockId, studentId, date) {
+    const block = store.blocks.find((item) => item.id === blockId)
+    if (!block) return
+    const override = store.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
+    const setting = getTheoryDaySetting(date, override)
+    const existing = store.theoryAttendances.find(
+      (item) => item.blockId === blockId && item.studentId === studentId && item.date === date,
+    )
+    const patch = {
+      blockId,
+      courseId: block.courseId,
+      studentId,
+      date,
+      checkInTime: existing?.checkInTime || setting.officialStartTime,
+      checkOutTime: existing?.checkOutTime || setting.officialEndTime,
+      checkoutChoice: 'teacherManualFullDay',
+      calculatedHours: setting.fullCreditHours,
+      adjustedHours: setting.fullCreditHours,
+      status: 'manual',
+      enteredBy: currentUser.id,
+      enteredAt: existing?.enteredAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    if (firebaseEnabled) {
+      if (existing) await updateDoc(doc(db, collectionMap.theoryAttendances, existing.id), patch)
+      else {
+        const id = createId('theory')
+        await setDoc(doc(db, collectionMap.theoryAttendances, id), { id, ...patch })
+      }
+      setMessage('Teilfehlzeit wurde als voller Tag gutgeschrieben.')
+      return
+    }
+    updateStore((draft) => {
+      const existing = draft.theoryAttendances.find(
+        (item) => item.blockId === blockId && item.studentId === studentId && item.date === date,
+      )
+      if (existing) Object.assign(existing, patch)
+      else draft.theoryAttendances.push({ id: createId('theory'), ...patch })
+    })
+    setMessage('Teilfehlzeit wurde als voller Tag gutgeschrieben.')
+  }
+
   async function saveOverride(blockId, date, patch) {
     const existing = store.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
     const block = store.blocks.find((item) => item.id === blockId)
@@ -1303,6 +1347,7 @@ function App() {
           createBlock={createBlock}
           savePracticeHours={savePracticeHours}
           addManualTheoryAttendance={addManualTheoryAttendance}
+          creditFullTheoryDay={creditFullTheoryDay}
           saveOverride={saveOverride}
           updateUser={updateUser}
           resetPassword={resetPassword}
@@ -1494,6 +1539,7 @@ function StaffDashboard(props) {
     createBlock,
     savePracticeHours,
     addManualTheoryAttendance,
+    creditFullTheoryDay,
     saveOverride,
     updateUser,
     resetPassword,
@@ -1548,6 +1594,7 @@ function StaffDashboard(props) {
             canSearchAllStudents={canSearchAllStudents}
             studentSearch={studentSearch}
             setStudentSearch={setStudentSearch}
+            creditFullTheoryDay={creditFullTheoryDay}
           />
         )}
         {tab === 'blocks' && (
@@ -1631,7 +1678,7 @@ function QrScanModal({ onScan, onClose }) {
   )
 }
 
-function StudentOverview({ store, students, selectedStudent, selectedCourse, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch }) {
+function StudentOverview({ store, students, selectedStudent, selectedCourse, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch, creditFullTheoryDay }) {
   const [reportRequest, setReportRequest] = useState(null)
   const [reportPeriod, setReportPeriod] = useState({ startDate: `${new Date().getFullYear()}-01-01`, endDate: todayIso() })
   const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
@@ -1687,7 +1734,7 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
             <div className="table-scroll">
               <div className="table compact attendance-detail-table">
-                <div className="row attendance-detail-row header"><span>Datum / Zeitraum</span><span>Quelle</span><span>Zeiten</span><span>Status</span><span>Fehlstunden</span></div>
+                <div className="row attendance-detail-row header"><span>Datum / Zeitraum</span><span>Quelle</span><span>Zeiten</span><span>Status</span><span>Fehlstunden</span><span>Aktion</span></div>
                 {details.map((entry) => (
                   <div className="row attendance-detail-row" key={`${entry.startDate}-${entry.endDate}-${entry.source}-${entry.status}`}>
                     <span>{getDateRangeLabel(entry.startDate, entry.endDate)}</span>
@@ -1695,6 +1742,18 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
                     <span>{entry.timeLabel || '-'}</span>
                     <span>{entry.status}</span>
                     <strong>{formatHours(entry.hours)}</strong>
+                    <span className="row-action">
+                      {entry.status === 'Teilfehlzeit' && entry.blockId ? (
+                        <button
+                          type="button"
+                          className="icon-button compact-action"
+                          title="Vollen Tag gutschreiben"
+                          onClick={() => creditFullTheoryDay(entry.blockId, selectedStudent.id, entry.startDate)}
+                        >
+                          <Check size={16} />
+                        </button>
+                      ) : '-'}
+                    </span>
                   </div>
                 ))}
                 {!details.length && <div className="empty">Keine Fehlzeiten vorhanden.</div>}
