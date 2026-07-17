@@ -1758,11 +1758,10 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
             <div className="table-scroll">
               <div className="table compact attendance-detail-table">
-                <div className="row attendance-detail-row header"><span>Datum / Zeitraum</span><span>Quelle</span><span>Zeiten</span><span>Status</span><span>Fehlstunden</span><span>Aktion</span></div>
+                <div className="row attendance-detail-row header"><span>Datum / Zeitraum</span><span>Zeiten</span><span>Status</span><span>Fehlstunden</span><span>Aktion</span></div>
                 {details.map((entry) => (
                   <div className="row attendance-detail-row" key={`${entry.startDate}-${entry.endDate}-${entry.source}-${entry.status}`}>
                     <span>{getDateRangeLabel(entry.startDate, entry.endDate)}</span>
-                    <span>{entry.source}</span>
                     <span>{entry.timeLabel || '-'}</span>
                     <span>{entry.status}</span>
                     <strong>{formatHours(entry.hours)}</strong>
