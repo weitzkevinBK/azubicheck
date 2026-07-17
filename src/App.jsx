@@ -279,6 +279,10 @@ function getTheoryDaySetting(date, override = {}) {
   }
 }
 
+function getFullCreditCheckoutTime(date, setting) {
+  return parseIsoLocal(date).getDay() === 5 ? '12:00' : setting.officialEndTime
+}
+
 function theoryTargetHoursForRange(store, block, startDate, endDate) {
   if (!blockOverlapsRange(block, startDate, endDate)) return 0
   const effectiveStartDate = block.startDate > startDate ? block.startDate : startDate
@@ -371,9 +375,10 @@ function calculateTheoryHours({ date, checkInTime, checkOutTime, override, choic
   const fullCredit = setting.fullCreditHours
   const checkIn = minutesFromTime(checkInTime)
   const checkOut = checkOutTime ? minutesFromTime(checkOutTime) : dayEnd
+  const fullCreditCheckout = minutesFromTime(getFullCreditCheckoutTime(date, setting))
 
   if (setting.teacherConfirmedEarlyEnd) return fullCredit
-  if (checkIn <= graceEnd && checkOut >= dayEnd) return fullCredit
+  if (checkIn <= graceEnd && checkOut >= fullCreditCheckout) return fullCredit
 
   const lateMinutes = Math.max(0, checkIn - dayStart)
   const earlyLeaveMinutes = Math.max(0, dayEnd - checkOut)
@@ -1825,7 +1830,7 @@ function BlockManager({ store, selectedCourse, blocks, activeBlock, setActiveBlo
         if (entry.blockId !== activeBlock.id || entry.checkoutChoice !== 'classEnded') return false
         const override = store.dayOverrides.find((item) => item.blockId === activeBlock.id && item.date === entry.date)
         const setting = getTheoryDaySetting(entry.date, override)
-        return minutesFromTime(entry.checkOutTime || setting.officialEndTime) < minutesFromTime(setting.officialEndTime)
+        return minutesFromTime(entry.checkOutTime || setting.officialEndTime) < minutesFromTime(getFullCreditCheckoutTime(entry.date, setting))
       })
       .forEach((entry) => {
         grouped[entry.date] = (grouped[entry.date] || 0) + 1
