@@ -1462,11 +1462,12 @@ function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }
   const [scanBusy, setScanBusy] = useState(false)
   const [scanResult, setScanResult] = useState(null)
   const summary = summarizeStudent(store, student)
-  const entries = store.theoryAttendances
+  const attendanceEntries = store.theoryAttendances
     .filter((item) => item.studentId === student.id)
     .map((item) => ({ ...item, block: store.blocks.find((block) => block.id === item.blockId) }))
     .sort((a, b) => b.date.localeCompare(a.date))
-  const todayEntry = entries.find((entry) => entry.date === todayIso())
+  const absenceEntries = getAbsenceItems(store, student).sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)) || a.source.localeCompare(b.source))
+  const todayEntry = attendanceEntries.find((entry) => entry.date === todayIso())
   const scanButtonLabel = todayEntry ? 'Abmelden' : 'Anmelden'
 
   async function startScanFlow() {
@@ -1528,19 +1529,19 @@ function StudentDashboard({ store, student, verifyDevice, handleAttendanceScan }
       )}
       <StatsCards summary={summary} />
       <section className="panel span-2">
-        <h2>Meine Anwesenheiten</h2>
+        <h2>Meine Fehlzeiten</h2>
         <div className="table">
-          <div className="row student-attendance-row header"><span>Datum</span><span>Block</span><span>Scanzeit</span><span>Status</span><span>Stunden</span></div>
-          {entries.map((entry) => (
-            <div className="row student-attendance-row" key={entry.id}>
-              <span>{entry.date}</span>
-              <span>{entry.block?.courseId} Block {entry.block?.blockNumber}</span>
-              <span>{entry.checkInTime || '-'}</span>
-              <span>{entry.status === 'checked-out' ? 'Abgeschlossen' : 'Eingecheckt'}</span>
-              <strong>{Number(entry.adjustedHours || entry.calculatedHours || 0).toFixed(2)} h</strong>
+          <div className="row student-attendance-row header"><span>Datum</span><span>Block</span><span>Zeiten</span><span>Status</span><span>Fehlstunden</span></div>
+          {absenceEntries.map((entry) => (
+            <div className="row student-attendance-row" key={`${entry.startDate}-${entry.endDate}-${entry.source}-${entry.status}`}>
+              <span>{getDateRangeLabel(entry.startDate, entry.endDate)}</span>
+              <span>{entry.source}</span>
+              <span>{entry.timeLabel || '-'}</span>
+              <span>{entry.status}</span>
+              <strong>{formatHours(entry.hours)}</strong>
             </div>
           ))}
-          {!entries.length && <div className="empty">Noch keine Anwesenheiten vorhanden.</div>}
+          {!absenceEntries.length && <div className="empty">Keine Fehlzeiten vorhanden.</div>}
         </div>
       </section>
     </main>
