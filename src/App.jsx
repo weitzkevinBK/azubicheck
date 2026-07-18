@@ -1219,7 +1219,7 @@ function App() {
     for (const studentId of studentIds) {
       await creditFullTheoryDay(blockId, studentId, date, { silent: true })
     }
-    setMessage('Teilfehlzeiten wurden für den Kurs als voller Tag gutgeschrieben.')
+    setMessage('Fehlzeiten wurden für den Kurs als voller Tag gutgeschrieben.')
   }
 
   async function saveOverride(blockId, date, patch) {
@@ -1719,7 +1719,7 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
   const details = selectedStudent
     ? getAbsenceItems(store, selectedStudent).sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)) || a.source.localeCompare(b.source))
     : []
-  const coursePartialAbsences = useMemo(() => {
+  const courseBulkAbsences = useMemo(() => {
     const courseId = selectedStudent?.courseId || selectedCourse
     const courseStudents = store.users.filter((user) => user.role === 'student' && user.courseId === courseId && user.active)
     const threshold = Math.floor(courseStudents.length / 2) + 1
@@ -1727,13 +1727,14 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
     const grouped = new Map()
     courseStudents.forEach((student) => {
       getAbsenceItems(store, student)
-        .filter((entry) => entry.status === 'Teilfehlzeit' && entry.blockId)
+        .filter((entry) => (entry.status === 'Teilfehlzeit' || entry.status === 'Fehltag') && entry.blockId)
         .forEach((entry) => {
-          const key = `${entry.blockId}|${entry.startDate}`
+          const key = `${entry.blockId}|${entry.startDate}|${entry.status}`
           const group = grouped.get(key) || {
             blockId: entry.blockId,
             date: entry.startDate,
             source: entry.source,
+            status: entry.status,
             studentIds: [],
             hours: 0,
           }
@@ -1743,7 +1744,10 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
         })
     })
     return Array.from(grouped.values())
-      .filter((group) => group.studentIds.length >= threshold)
+      .filter((group) => {
+        if (group.status === 'Teilfehlzeit') return group.studentIds.length >= threshold
+        return group.studentIds.length === courseStudents.length
+      })
       .sort((a, b) => b.date.localeCompare(a.date))
   }, [selectedCourse, selectedStudent, store])
   return (
@@ -1793,12 +1797,16 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             </div>
             <StatsCards summary={summary} />
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
-            {!!coursePartialAbsences.length && (
+            {!!courseBulkAbsences.length && (
               <div className="bulk-absence-list">
-                {coursePartialAbsences.map((group) => (
-                  <div className="bulk-absence-box" key={`${group.blockId}-${group.date}`}>
+                {courseBulkAbsences.map((group) => (
+                  <div className="bulk-absence-box" key={`${group.blockId}-${group.date}-${group.status}`}>
                     <AlertTriangle size={18} />
-                    <span>{group.studentIds.length} Azubis haben am {formatDate(group.date)} eine Teilfehlzeit.</span>
+                    <span>
+                      {group.status === 'Fehltag'
+                        ? `Alle Azubis haben am ${formatDate(group.date)} einen Fehltag.`
+                        : `${group.studentIds.length} Azubis haben am ${formatDate(group.date)} eine Teilfehlzeit.`}
+                    </span>
                     <button
                       type="button"
                       onClick={() => creditFullTheoryDayForStudents(group.blockId, group.studentIds, group.date)}
