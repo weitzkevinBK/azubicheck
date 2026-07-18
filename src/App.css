@@ -586,6 +586,32 @@ form {
   height: 32px;
 }
 
+.bulk-absence-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+
+.bulk-absence-box {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  padding: 0.7rem;
+}
+
+.bulk-absence-box button {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 8px;
+  color: white;
+  background: rgba(245, 158, 11, 0.24);
+  padding: 0.5rem 0.65rem;
+  font-weight: 800;
+}
+
 .empty {
   color: var(--muted);
   border: 1px dashed var(--border);
