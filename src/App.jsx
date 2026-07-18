@@ -1222,6 +1222,51 @@ function App() {
     setMessage('Fehlzeiten wurden für den Kurs als voller Tag gutgeschrieben.')
   }
 
+  async function recordTheoryAbsence(blockId, studentId, values) {
+    const block = store.blocks.find((item) => item.id === blockId)
+    if (!block) return
+    const override = store.dayOverrides.find((item) => item.blockId === blockId && item.date === values.date)
+    const setting = getTheoryDaySetting(values.date, override)
+    const missingHours = Math.min(setting.fullCreditHours, Math.max(0, Number(values.missingHours || 0)))
+    const creditedHours = Math.max(0, setting.fullCreditHours - missingHours)
+    const existing = store.theoryAttendances.find(
+      (item) => item.blockId === blockId && item.studentId === studentId && item.date === values.date,
+    )
+    const record = {
+      blockId,
+      courseId: block.courseId,
+      studentId,
+      date: values.date,
+      checkInTime: '',
+      checkOutTime: '',
+      checkoutChoice: creditedHours > 0 ? 'teacherManualPartialAbsence' : 'teacherManualAbsence',
+      calculatedHours: creditedHours,
+      adjustedHours: creditedHours,
+      status: 'manual',
+      enteredBy: currentUser.id,
+      enteredAt: existing?.enteredAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    if (firebaseEnabled) {
+      if (existing) await updateDoc(doc(db, collectionMap.theoryAttendances, existing.id), record)
+      else {
+        const id = createId('theory')
+        await setDoc(doc(db, collectionMap.theoryAttendances, id), { id, ...record })
+      }
+      setMessage('Fehlzeit wurde für den Azubi eingetragen.')
+      return
+    }
+    updateStore((draft) => {
+      const existing = draft.theoryAttendances.find(
+        (item) => item.blockId === blockId && item.studentId === studentId && item.date === values.date,
+      )
+      if (existing) Object.assign(existing, record)
+      else draft.theoryAttendances.push({ id: createId('theory'), ...record })
+    })
+    setMessage('Fehlzeit wurde für den Azubi eingetragen.')
+  }
+
   async function saveOverride(blockId, date, patch) {
     const existing = store.dayOverrides.find((item) => item.blockId === blockId && item.date === date)
     const block = store.blocks.find((item) => item.id === blockId)
@@ -1366,6 +1411,7 @@ function App() {
           addManualTheoryAttendance={addManualTheoryAttendance}
           creditFullTheoryDay={creditFullTheoryDay}
           creditFullTheoryDayForStudents={creditFullTheoryDayForStudents}
+          recordTheoryAbsence={recordTheoryAbsence}
           saveOverride={saveOverride}
           updateUser={updateUser}
           resetPassword={resetPassword}
@@ -1573,6 +1619,7 @@ function StaffDashboard(props) {
     addManualTheoryAttendance,
     creditFullTheoryDay,
     creditFullTheoryDayForStudents,
+    recordTheoryAbsence,
     saveOverride,
     updateUser,
     resetPassword,
@@ -1629,6 +1676,8 @@ function StaffDashboard(props) {
             setStudentSearch={setStudentSearch}
             creditFullTheoryDay={creditFullTheoryDay}
             creditFullTheoryDayForStudents={creditFullTheoryDayForStudents}
+            recordTheoryAbsence={recordTheoryAbsence}
+            resetPassword={resetPassword}
           />
         )}
         {tab === 'blocks' && (
@@ -1712,13 +1761,22 @@ function QrScanModal({ onScan, onClose }) {
   )
 }
 
-function StudentOverview({ store, students, selectedStudent, selectedCourse, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch, creditFullTheoryDay, creditFullTheoryDayForStudents }) {
+function StudentOverview({ store, students, selectedStudent, selectedCourse, setSelectedStudentId, canSearchAllStudents, studentSearch, setStudentSearch, creditFullTheoryDay, creditFullTheoryDayForStudents, recordTheoryAbsence, resetPassword }) {
   const [reportRequest, setReportRequest] = useState(null)
   const [reportPeriod, setReportPeriod] = useState({ startDate: `${new Date().getFullYear()}-01-01`, endDate: todayIso() })
+  const [absenceFormOpen, setAbsenceFormOpen] = useState(false)
+  const [absenceForm, setAbsenceForm] = useState({ blockId: '', date: todayIso(), missingHours: '', checkInTime: '07:15', checkOutTime: '14:15' })
   const summary = selectedStudent ? summarizeStudent(store, selectedStudent) : null
   const details = selectedStudent
     ? getAbsenceItems(store, selectedStudent).sort((a, b) => String(b.startDate).localeCompare(String(a.startDate)) || a.source.localeCompare(b.source))
     : []
+  const studentTheoryBlocks = useMemo(() => (
+    selectedStudent
+      ? store.blocks
+        .filter((block) => block.courseId === selectedStudent.courseId && block.type === 'theory' && block.active)
+        .sort((a, b) => b.startDate.localeCompare(a.startDate))
+      : []
+  ), [selectedStudent, store.blocks])
   const courseBulkAbsences = useMemo(() => {
     const courseId = selectedStudent?.courseId || selectedCourse
     const courseStudents = store.users.filter((user) => user.role === 'student' && user.courseId === courseId && user.active)
@@ -1750,6 +1808,25 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
       })
       .sort((a, b) => b.date.localeCompare(a.date))
   }, [selectedCourse, selectedStudent, store])
+  useEffect(() => {
+    if (!studentTheoryBlocks.length) return
+    const matchingBlock = studentTheoryBlocks.find((block) => block.startDate <= absenceForm.date && block.endDate >= absenceForm.date)
+    const nextBlockId = matchingBlock?.id || studentTheoryBlocks[0].id
+    const selectedBlock = studentTheoryBlocks.find((block) => block.id === (absenceForm.blockId || nextBlockId)) || matchingBlock || studentTheoryBlocks[0]
+    const override = selectedBlock ? store.dayOverrides.find((item) => item.blockId === selectedBlock.id && item.date === absenceForm.date) : null
+    const setting = getTheoryDaySetting(absenceForm.date, override)
+    setAbsenceForm((previous) => {
+      const validPreviousBlock = studentTheoryBlocks.some((block) => block.id === previous.blockId)
+      const next = {
+        ...previous,
+        blockId: validPreviousBlock ? previous.blockId : nextBlockId,
+        missingHours: previous.missingHours || String(setting.fullCreditHours),
+        checkInTime: setting.officialStartTime,
+        checkOutTime: setting.officialEndTime,
+      }
+      return JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+    })
+  }, [absenceForm.blockId, absenceForm.date, absenceForm.missingHours, studentTheoryBlocks, store.dayOverrides])
   return (
     <div className="split">
       <section className="panel">
@@ -1791,9 +1868,19 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
                 <h2>{selectedStudent.firstName} {selectedStudent.lastName}</h2>
                 <p>{selectedStudent.courseId}</p>
               </div>
-              <button className="btn secondary" onClick={() => setReportRequest({ students: [selectedStudent], title: `Fehlzeiten ${selectedStudent.firstName} ${selectedStudent.lastName}` })}>
-                <Printer size={18} /> Azubi
-              </button>
+              <div className="panel-actions">
+                <button className="btn secondary" onClick={() => setAbsenceFormOpen(true)}>
+                  <AlertTriangle size={18} /> Fehlzeit
+                </button>
+                {canSearchAllStudents && (
+                  <button className="btn secondary" onClick={() => resetPassword(selectedStudent.email)}>
+                    Passwort
+                  </button>
+                )}
+                <button className="btn secondary" onClick={() => setReportRequest({ students: [selectedStudent], title: `Fehlzeiten ${selectedStudent.firstName} ${selectedStudent.lastName}` })}>
+                  <Printer size={18} /> Azubi
+                </button>
+              </div>
             </div>
             <StatsCards summary={summary} />
             <h3>Fehlzeiten nach Tagen und Blöcken</h3>
@@ -1873,6 +1960,58 @@ function StudentOverview({ store, students, selectedStudent, selectedCourse, set
             <div className="modal-actions">
               <button className="btn primary" disabled={reportPeriod.startDate > reportPeriod.endDate}><Printer size={18} /> Bericht erstellen</button>
               <button type="button" className="btn secondary" onClick={() => setReportRequest(null)}>Abbrechen</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {absenceFormOpen && selectedStudent && (
+        <div className="modal-backdrop">
+          <form
+            className="modal"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!absenceForm.blockId || !absenceForm.date || Number(absenceForm.missingHours) <= 0) return
+              recordTheoryAbsence(absenceForm.blockId, selectedStudent.id, absenceForm)
+              setAbsenceFormOpen(false)
+            }}
+          >
+            <h2>Fehlzeit eintragen</h2>
+            <p>Trage hier eine Fehlzeit für {selectedStudent.firstName} {selectedStudent.lastName} ein. Bestehende volle Gutschriften für diesen Tag werden überschrieben.</p>
+            <div className="form-grid two">
+              <label>Block
+                <select value={absenceForm.blockId} onChange={(event) => setAbsenceForm({ ...absenceForm, blockId: event.target.value })} required>
+                  {studentTheoryBlocks.map((block) => (
+                    <option value={block.id} key={block.id}>Theorie Block {block.blockNumber} ({formatDate(block.startDate)} bis {formatDate(block.endDate)})</option>
+                  ))}
+                </select>
+              </label>
+              <label>Datum
+                <input type="date" value={absenceForm.date} onChange={(event) => {
+                  const nextDate = event.target.value
+                  const block = studentTheoryBlocks.find((item) => item.startDate <= nextDate && item.endDate >= nextDate)
+                  const override = block ? store.dayOverrides.find((item) => item.blockId === block.id && item.date === nextDate) : null
+                  const setting = getTheoryDaySetting(nextDate, override)
+                  setAbsenceForm({
+                    ...absenceForm,
+                    blockId: block?.id || absenceForm.blockId,
+                    date: nextDate,
+                    missingHours: String(setting.fullCreditHours),
+                    checkInTime: setting.officialStartTime,
+                    checkOutTime: setting.officialEndTime,
+                  })
+                }} required />
+              </label>
+              <label>Fehlstunden
+                <input type="number" min="0.25" step="0.25" value={absenceForm.missingHours} onChange={(event) => setAbsenceForm({ ...absenceForm, missingHours: event.target.value })} required />
+              </label>
+              <label>Zeitrahmen
+                <input value={`${absenceForm.checkInTime} bis ${absenceForm.checkOutTime}`} disabled />
+              </label>
+            </div>
+            {!studentTheoryBlocks.length && <div className="form-message">Für diesen Azubi gibt es noch keinen aktiven Theorieblock.</div>}
+            <div className="modal-actions">
+              <button className="btn primary" disabled={!studentTheoryBlocks.length || !absenceForm.blockId || Number(absenceForm.missingHours) <= 0}>Fehlzeit speichern</button>
+              <button type="button" className="btn secondary" onClick={() => setAbsenceFormOpen(false)}>Abbrechen</button>
             </div>
           </form>
         </div>

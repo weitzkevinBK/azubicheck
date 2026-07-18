@@ -364,6 +364,17 @@ form {
   gap: 0.45rem;
 }
 
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.panel-actions .btn {
+  min-height: 40px;
+}
+
 .span-2 {
   grid-column: span 2;
 }
